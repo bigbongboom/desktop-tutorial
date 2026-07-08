@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crypto Signal Desk — BTC · ETH · SOL · HYPE</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb;         /* chart surface */
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;          /* price — blue */
+    --series-2: #1baf7a;          /* EMA20 — aqua */
+    --series-3: #eda100;          /* EMA50 — yellow */
+    --series-4: #4a3aa7;          /* EMA200 — violet */
+    --div-pos: #2a78d6;           /* diverging + pole (MACD hist) */
+    --div-neg: #e34948;           /* diverging − pole */
+    --div-mid: #f0efec;
+    --status-good: #0ca30c;       /* LONG */
+    --status-critical: #d03b3b;   /* SHORT */
+    --delta-up: #006300;
+    --delta-down: #b02a2a;
+    --chip: #f0efec;
+    --accent-soft: rgba(42,120,214,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #199e70;
+      --series-3: #c98500;
+      --series-4: #9085e9;
+      --div-pos: #3987e5;
+      --div-neg: #e66767;
+      --div-mid: #383835;
+      --status-good: #0ca30c;
+      --status-critical: #d03b3b;
+      --delta-up: #0ca30c;
+      --delta-down: #e66767;
+      --chip: #262624;
+      --accent-soft: rgba(57,135,229,0.14);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 48px; }
+
+  /* ---------- header ---------- */
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .src-badge {
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--text-secondary); background: var(--surface-1);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .src-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+  .src-badge.live .dot { background: var(--status-good); }
+  .src-badge.demo .dot { background: var(--status-critical); }
+  header .spacer { flex: 1; }
+  .updated { font-size: 12px; color: var(--text-muted); }
+  button.refresh {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary);
+  }
+  button.refresh:hover { background: var(--chip); }
+
+  .risk-note {
+    font-size: 12px; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 14px; margin: 10px 0 18px;
+  }
+  .risk-note strong { color: var(--text-primary); }
+
+  /* ---------- filter row ---------- */
+  .filters {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .tf-group { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--surface-1); }
+  .tf-group button {
+    font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    padding: 7px 14px; border: none; background: transparent; color: var(--text-secondary);
+  }
+  .tf-group button + button { border-left: 1px solid var(--border); }
+  .tf-group button.active { background: var(--accent-soft); color: var(--text-primary); }
+  .filters label { font-size: 12px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+  .filters input, .filters select {
+    font: inherit; font-size: 12.5px; padding: 6px 9px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+    width: 110px;
+  }
+  .filters select { width: auto; }
+  .filters .toggle-table { margin-left: auto; }
+
+  /* ---------- overview cards ---------- */
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .asset-card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; cursor: pointer; text-align: left; font: inherit; color: inherit;
+    display: block; width: 100%;
+  }
+  .asset-card:hover { border-color: var(--text-muted); }
+  .asset-card.selected { border-color: var(--series-1); box-shadow: 0 0 0 1px var(--series-1); }
+  .asset-card .row1 { display: flex; align-items: baseline; gap: 8px; }
+  .asset-card .name { font-weight: 700; font-size: 14px; }
+  .asset-card .tick { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+  .asset-card .price { font-size: 22px; font-weight: 650; margin-top: 4px; }
+  .asset-card .delta { font-size: 12px; font-weight: 600; }
+  .delta.up { color: var(--delta-up); }
+  .delta.down { color: var(--delta-down); }
+  .asset-card .spark { margin-top: 8px; display: block; }
+  .sig-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; margin-top: 8px;
+    background: var(--chip); color: var(--text-secondary);
+  }
+  .sig-chip.long { background: rgba(12,163,12,0.12); color: var(--status-good); }
+  .sig-chip.short { background: rgba(208,59,59,0.12); color: var(--status-critical); }
+
+  /* ---------- cards / sections ---------- */
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+  .card .sub { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+  .fading { opacity: 0.45; transition: opacity .2s; }
+
+  /* ---------- signal hero ---------- */
+  .hero-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+  @media (min-width: 820px) { .hero-grid { grid-template-columns: 340px 1fr; } }
+  .hero-signal { display: flex; flex-direction: column; gap: 8px; }
+  .hero-asset { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+  .hero-verdict { font-size: 48px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; }
+  .hero-verdict.long { color: var(--status-good); }
+  .hero-verdict.short { color: var(--status-critical); }
+  .hero-verdict.flat { color: var(--text-secondary); }
+  .hero-sub { font-size: 13px; color: var(--text-secondary); max-width: 46ch; }
+  .meter { margin-top: 6px; }
+  .meter .track { position: relative; height: 10px; border-radius: 6px; background: var(--div-mid); overflow: hidden; }
+  .meter .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--axis); }
+  .meter .fill { position: absolute; top: 0; bottom: 0; border-radius: 6px; }
+  .meter .scale { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-muted); margin-top: 4px; }
+  .mtf { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .mtf .chip {
+    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+    background: var(--chip); color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center;
+  }
+  .mtf .chip .v.long { color: var(--status-good); }
+  .mtf .chip .v.short { color: var(--status-critical); }
+  .mtf-note { font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+
+  /* ---------- trade plan tiles ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .tile { border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; }
+  .tile .lbl { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+  .tile .val { font-size: 17px; font-weight: 650; margin-top: 2px; }
+  .tile .note { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .plan-caveat { font-size: 12px; color: var(--text-secondary); margin-top: 12px; }
+
+  /* ---------- charts ---------- */
+  .chart-card { position: relative; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .legend .key-line { width: 16px; height: 2px; border-radius: 2px; display: inline-block; }
+  .legend .key-rect { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .chart-svg { display: block; width: 100%; height: auto; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 5; display: none;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 9px;
+    padding: 8px 11px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); min-width: 150px;
+  }
+  .tooltip .t-date { font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+  .tooltip .t-row { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-top: 2px; }
+  .tooltip .t-key { width: 12px; height: 2px; border-radius: 2px; flex: none; }
+  .tooltip .t-name { color: var(--text-secondary); flex: 1; }
+  .tooltip .t-val { font-weight: 650; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+  /* ---------- breakdown table & data table ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-size: 11px; color: var(--text-muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--grid); }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--grid); color: var(--text-primary); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .verdict-cell { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .verdict-cell .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .verdict-cell.bull { color: var(--status-good); } .verdict-cell.bull .dot { background: var(--status-good); }
+  .verdict-cell.bear { color: var(--status-critical); } .verdict-cell.bear .dot { background: var(--status-critical); }
+  .verdict-cell.flat { color: var(--text-secondary); } .verdict-cell.flat .dot { background: var(--text-muted); }
+  .table-wrap { overflow-x: auto; }
+  .hidden { display: none; }
+
+  footer { font-size: 11.5px; color: var(--text-muted); margin-top: 26px; max-width: 90ch; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Crypto Signal Desk</h1>
+    <span class="src-badge" id="srcBadge"><span class="dot"></span><span id="srcText">connecting…</span></span>
+    <span class="spacer"></span>
+    <span class="updated" id="updated"></span>
+    <button class="refresh" id="refreshBtn" type="button">Refresh</button>
+  </header>
+
+  <p class="risk-note">
+    <strong>How to read this desk:</strong> the engine scores twelve technical signals (trend, momentum,
+    mean-reversion, volume) into one long/short score per timeframe, then builds an ATR-based trade plan —
+    entry, stop, target, hold window and position size from your capital and risk budget.
+    It measures probabilities, not certainties: <strong>no model predicts markets. Never risk money you can't afford to lose.</strong>
+  </p>
+
+  <!-- one filter row, above everything it scopes -->
+  <section class="filters" aria-label="Filters">
+    <div class="tf-group" id="tfGroup" role="group" aria-label="Timeframe">
+      <button type="button" data-tf="15m">15m</button>
+      <button type="button" data-tf="1h" class="active">1h</button>
+      <button type="button" data-tf="4h">4h</button>
+      <button type="button" data-tf="1d">1D</button>
+    </div>
+    <label>Capital (USD)
+      <input id="capital" type="number" min="10" step="100" value="1000" inputmode="decimal">
+    </label>
+    <label>Risk per trade
+      <select id="riskPct">
+        <option value="0.005">0.5%</option>
+        <option value="0.01" selected>1%</option>
+        <option value="0.02">2%</option>
+      </select>
+    </label>
+    <label class="toggle-table"><input id="tableToggle" type="checkbox"> Table view</label>
+  </section>
+
+  <!-- overview -->
+  <section class="overview" id="overview" aria-label="Assets"></section>
+
+  <!-- signal hero -->
+  <section class="card" id="heroCard">
+    <div class="hero-grid">
+      <div class="hero-signal">
+        <span class="hero-asset" id="heroAsset"></span>
+        <span class="hero-verdict" id="heroVerdict">—</span>
+        <span class="hero-sub" id="heroSub"></span>
+        <div class="meter" aria-hidden="true">
+          <div class="track"><div class="mid"></div><div class="fill" id="meterFill"></div></div>
+          <div class="scale"><span>−100 · max short</span><span>0</span><span>+100 · max long</span></div>
+        </div>
+      </div>
+      <div>
+        <h2>Timeframe consensus</h2>
+        <p class="sub">The same engine run on every timeframe. Alignment across timeframes strengthens conviction; conflict argues for a smaller position or standing aside.</p>
+        <div class="mtf" id="mtfChips"></div>
+        <p class="mtf-note" id="mtfNote"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- trade plan -->
+  <section class="card">
+    <h2 id="planTitle">Trade plan</h2>
+    <p class="sub" id="planSub"></p>
+    <div class="tiles" id="planTiles"></div>
+    <p class="plan-caveat" id="planCaveat"></p>
+  </section>
+
+  <!-- charts -->
+  <section class="card chart-card">
+    <h2 id="priceTitle">Price</h2>
+    <p class="sub">Close with EMA 20 / 50 / 200 and a Bollinger(20, 2) band wash.</p>
+    <div class="legend" id="priceLegend"></div>
+    <div id="priceChart"></div>
+    <div class="tooltip" id="priceTip"></div>
+  </section>
+
+  <section class="card chart-card">
+    <h2>RSI (14)</h2>
+    <p class="sub">Momentum oscillator — above 70 stretched long, below 30 stretched short.</p>
+    <div id="rsiChart"></div>
+    <div class="tooltip" id="rsiTip"></div>
+  </section>
+
+  <section class="card chart-card">
+    <h2>MACD (12, 26, 9)</h2>
+    <p class="sub">Histogram sign is the polarity: fill above zero favors longs, below zero favors shorts.</p>
+    <div class="legend" id="macdLegend"></div>
+    <div id="macdChart"></div>
+    <div class="tooltip" id="macdTip"></div>
+  </section>
+
+  <!-- indicator breakdown -->
+  <section class="card">
+    <h2>Signal breakdown</h2>
+    <p class="sub">Every component of the score, its reading, and the points it contributes (−100…+100 total).</p>
+    <div class="table-wrap"><table id="breakdownTable">
+      <thead><tr><th>Signal</th><th>Reading</th><th>Verdict</th><th class="num">Points</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <!-- table view (accessibility twin of the charts) -->
+  <section class="card hidden" id="dataTableCard">
+    <h2>Data table</h2>
+    <p class="sub" id="dataTableSub"></p>
+    <div class="table-wrap"><table id="dataTable">
+      <thead><tr>
+        <th>Time</th><th class="num">Open</th><th class="num">High</th><th class="num">Low</th>
+        <th class="num">Close</th><th class="num">Volume</th><th class="num">RSI</th><th class="num">MACD hist</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <footer>
+    <strong>Disclaimer.</strong> This dashboard is an educational technical-analysis tool, not financial advice.
+    Signals are derived from historical price and volume; they describe probabilistic tendencies and can be —
+    and often are — wrong, especially around news events. Crypto is highly volatile and leveraged positions can
+    be liquidated. The position-sizing module assumes you honor the stop; sizing is meaningless without it.
+    Do your own research and never risk funds you cannot afford to lose.
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   Configuration
+   ============================================================ */
+const ASSETS = [
+  { id: "BTC",  name: "Bitcoin",     binance: "BTCUSDT",  okx: "BTC-USDT",  hl: "BTC",  demoBase: 100000 },
+  { id: "ETH",  name: "Ethereum",    binance: "ETHUSDT",  okx: "ETH-USDT",  hl: "ETH",  demoBase: 3500 },
+  { id: "SOL",  name: "Solana",      binance: "SOLUSDT",  okx: "SOL-USDT",  hl: "SOL",  demoBase: 160 },
+  { id: "HYPE", name: "Hyperliquid", binance: "HYPEUSDT", okx: "HYPE-USDT", hl: "HYPE", demoBase: 40 },
+];
+const TIMEFRAMES = {
+  "15m": { binance: "15m", okx: "15m", hl: "15m", minutes: 15,   label: "15 min", style: "scalp (intraday)" },
+  "1h":  { binance: "1h",  okx: "1H",  hl: "1h",  minutes: 60,   label: "1 hour", style: "intraday swing"   },
+  "4h":  { binance: "4h",  okx: "4H",  hl: "4h",  minutes: 240,  label: "4 hour", style: "multi-day swing"  },
+  "1d":  { binance: "1d",  okx: "1D",  hl: "1d",  minutes: 1440, label: "1 day",  style: "position trade"   },
+};
+const CANDLES = 400;          // fetched (indicator warm-up)
+const SHOWN = 120;            // rendered
+const REFRESH_MS = 60_000;
+
+const state = {
+  asset: "BTC",
+  tf: "1h",
+  capital: 1000,
+  riskPct: 0.01,
+  data: new Map(),            // key `${asset}:${tf}` -> { candles, source, fetchedAt }
+  refreshTimer: null,
+};
+
+/* ============================================================
+   Small utilities (all DOM text goes through textContent)
+   ============================================================ */
+const $ = (id) => document.getElementById(id);
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const last = (a) => a[a.length - 1];
+
+function fmtPrice(v) {
+  if (!isFinite(v)) return "—";
+  const abs = Math.abs(v);
+  const dp = abs >= 1000 ? 0 : abs >= 100 ? 2 : abs >= 1 ? 3 : 5;
+  return v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+function fmtUsd(v) { return "$" + fmtPrice(v); }
+/* money amounts (risk, notional, P&L) — always 2 decimals so $10 never reads as $10.000 */
+function fmtMoney(v) {
+  if (!isFinite(v)) return "—";
+  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtNum(v, dp = 2) { return isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }) : "—"; }
+function fmtCompact(v) {
+  if (!isFinite(v)) return "—";
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return (v / 1e9).toFixed(2) + "B";
+  if (abs >= 1e6) return (v / 1e6).toFixed(2) + "M";
+  if (abs >= 1e3) return (v / 1e3).toFixed(1) + "K";
+  return v.toFixed(2);
+}
+function fmtTime(ms, tf) {
+  const d = new Date(ms);
+  if (TIMEFRAMES[tf].minutes >= 1440)
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
+         d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function fmtDuration(minutes) {
+  if (minutes < 90) return Math.round(minutes) + " min";
+  if (minutes < 48 * 60) return (minutes / 60).toFixed(minutes < 600 ? 1 : 0).replace(/\.0$/, "") + " h";
+  return (minutes / 1440).toFixed(1).replace(/\.0$/, "") + " days";
+}
+
+/* ============================================================
+   Data layer — Binance → OKX → Hyperliquid → simulated
+   ============================================================ */
+async function fetchJson(url, opts = {}, timeoutMs = 4000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...opts, signal: ctl.signal });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return await res.json();
+  } finally { clearTimeout(t); }
+}
+
+async function fromBinance(asset, tf) {
+  const u = `https://api.binance.com/api/v3/klines?symbol=${asset.binance}&interval=${TIMEFRAMES[tf].binance}&limit=${CANDLES}`;
+  const rows = await fetchJson(u);
+  if (!Array.isArray(rows) || rows.length < 60) throw new Error("thin data");
+  return rows.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+}
+async function fromOkx(asset, tf) {
+  const u = `https://www.okx.com/api/v5/market/candles?instId=${asset.okx}&bar=${TIMEFRAMES[tf].okx}&limit=${Math.min(CANDLES, 300)}`;
+  const j = await fetchJson(u);
+  if (!j || !Array.isArray(j.data) || j.data.length < 60) throw new Error("thin data");
+  return j.data.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] })).reverse();
+}
+async function fromHyperliquid(asset, tf) {
+  const end = Date.now();
+  const start = end - CANDLES * TIMEFRAMES[tf].minutes * 60_000;
+  const j = await fetchJson("https://api.hyperliquid.xyz/info", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "candleSnapshot", req: { coin: asset.hl, interval: TIMEFRAMES[tf].hl, startTime: start, endTime: end } }),
+  });
+  if (!Array.isArray(j) || j.length < 60) throw new Error("thin data");
+  return j.map(r => ({ t: +r.t, o: +r.o, h: +r.h, l: +r.l, c: +r.c, v: +r.v }));
+}
+/* Deterministic simulated series so the desk still demonstrates itself offline. */
+function simulated(asset, tf) {
+  let seed = 0;
+  for (const ch of (asset.id + tf)) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+  const rng = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
+  const stepMs = TIMEFRAMES[tf].minutes * 60_000;
+  const t0 = Date.now() - CANDLES * stepMs;
+  const vol = 0.006 * Math.sqrt(TIMEFRAMES[tf].minutes / 60);
+  let price = asset.demoBase, drift = 0;
+  const out = [];
+  for (let i = 0; i < CANDLES; i++) {
+    drift = drift * 0.97 + (rng() - 0.5) * vol * 0.6;
+    const ret = drift + (rng() - 0.5) * 2 * vol;
+    const o = price;
+    const c = Math.max(o * (1 + ret), asset.demoBase * 0.05);
+    const h = Math.max(o, c) * (1 + rng() * vol * 0.8);
+    const l = Math.min(o, c) * (1 - rng() * vol * 0.8);
+    out.push({ t: t0 + i * stepMs, o, h, l, c, v: asset.demoBase * 30 * (0.5 + rng()) });
+    price = c;
+  }
+  return out;
+}
+
+/* Consecutive-failure count per source: a source that keeps failing (geo-block,
+   proxy reset) is tried last instead of costing a timeout on every request. */
+const sourceFails = new Map();
+const failCount = (name) => sourceFails.get(name) || 0;
+
+async function getCandles(assetId, tf, maxAgeMs = REFRESH_MS - 2000) {
+  const key = assetId + ":" + tf;
+  const cached = state.data.get(key);
+  if (cached && Date.now() - cached.fetchedAt < maxAgeMs) return cached;
+  const asset = ASSETS.find(a => a.id === assetId);
+  // HYPE trades natively on Hyperliquid, so its own API is the primary source.
+  let chain = assetId === "HYPE"
+    ? [["Hyperliquid", fromHyperliquid], ["Binance", fromBinance], ["OKX", fromOkx]]
+    : [["Binance", fromBinance], ["OKX", fromOkx], ["Hyperliquid", fromHyperliquid]];
+  // healthy sources first; a source that failed twice in a row is skipped outright
+  // (failure counts decay each refresh cycle, so blocked sources get re-probed later)
+  const usable = chain.filter(([name]) => failCount(name) < 2);
+  chain = (usable.length ? usable : chain).map((c, i) => [c, i])
+    .sort((a, b) => (Math.min(failCount(a[0][0]), 3) - Math.min(failCount(b[0][0]), 3)) || (a[1] - b[1]))
+    .map(([c]) => c);
+  for (const [name, fn] of chain) {
+    try {
+      const candles = await fn(asset, tf);
+      sourceFails.set(name, 0);
+      const entry = { candles, source: name, fetchedAt: Date.now() };
+      state.data.set(key, entry);
+      return entry;
+    } catch (_) {
+      sourceFails.set(name, failCount(name) + 1);
+    }
+  }
+  const entry = { candles: simulated(asset, tf), source: "Simulated", fetchedAt: Date.now() };
+  state.data.set(key, entry);
+  return entry;
+}
+
+/* ============================================================
+   Indicators — arrays aligned to candles, null while warming up
+   ============================================================ */
+function sma(values, period) {
+  const out = new Array(values.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= period) sum -= values[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
+}
+function ema(values, period) {
+  const out = new Array(values.length).fill(null);
+  const k = 2 / (period + 1);
+  let prev = null, warm = 0;
+  for (let i = 0; i < values.length; i++) {
+    warm += values[i];
+    if (i === period - 1) { prev = warm / period; out[i] = prev; }
+    else if (i >= period) { prev = values[i] * k + prev * (1 - k); out[i] = prev; }
+  }
+  return out;
+}
+function rsi(closes, period = 14) {
+  const out = new Array(closes.length).fill(null);
+  let ag = 0, al = 0;
+  for (let i = 1; i < closes.length; i++) {
+    const ch = closes[i] - closes[i - 1];
+    const g = Math.max(ch, 0), l = Math.max(-ch, 0);
+    if (i <= period) {
+      ag += g; al += l;
+      if (i === period) {
+        ag /= period; al /= period;
+        out[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+      }
+    } else {
+      ag = (ag * (period - 1) + g) / period;
+      al = (al * (period - 1) + l) / period;
+      out[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+    }
+  }
+  return out;
+}
+function macd(closes, fast = 12, slow = 26, sig = 9) {
+  const ef = ema(closes, fast), es = ema(closes, slow);
+  const line = closes.map((_, i) => (ef[i] != null && es[i] != null) ? ef[i] - es[i] : null);
+  const firstIdx = line.findIndex(v => v != null);
+  const valid = line.slice(firstIdx);
+  const sigValid = ema(valid, sig);
+  const signal = new Array(closes.length).fill(null);
+  for (let i = 0; i < sigValid.length; i++) if (sigValid[i] != null) signal[firstIdx + i] = sigValid[i];
+  const hist = line.map((v, i) => (v != null && signal[i] != null) ? v - signal[i] : null);
+  return { line, signal, hist };
+}
+function bollinger(closes, period = 20, mult = 2) {
+  const mid = sma(closes, period);
+  const upper = new Array(closes.length).fill(null);
+  const lower = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    let s = 0;
+    for (let j = i - period + 1; j <= i; j++) s += (closes[j] - mid[i]) ** 2;
+    const sd = Math.sqrt(s / period);
+    upper[i] = mid[i] + mult * sd;
+    lower[i] = mid[i] - mult * sd;
+  }
+  return { mid, upper, lower };
+}
+function atr(candles, period = 14) {
+  const out = new Array(candles.length).fill(null);
+  let acc = 0, prev = null;
+  for (let i = 1; i < candles.length; i++) {
+    const c = candles[i], pc = candles[i - 1].c;
+    const tr = Math.max(c.h - c.l, Math.abs(c.h - pc), Math.abs(c.l - pc));
+    if (i <= period) {
+      acc += tr;
+      if (i === period) { prev = acc / period; out[i] = prev; }
+    } else {
+      prev = (prev * (period - 1) + tr) / period;
+      out[i] = prev;
+    }
+  }
+  return out;
+}
+function stochastic(candles, period = 14, dPeriod = 3) {
+  const k = new Array(candles.length).fill(null);
+  for (let i = period - 1; i < candles.length; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) { hi = Math.max(hi, candles[j].h); lo = Math.min(lo, candles[j].l); }
+    k[i] = hi === lo ? 50 : ((candles[i].c - lo) / (hi - lo)) * 100;
+  }
+  const firstIdx = k.findIndex(v => v != null);
+  const dValid = sma(k.slice(firstIdx), dPeriod);
+  const d = new Array(candles.length).fill(null);
+  for (let i = 0; i < dValid.length; i++) if (dValid[i] != null) d[firstIdx + i] = dValid[i];
+  return { k, d };
+}
+function obv(candles) {
+  const out = new Array(candles.length).fill(0);
+  for (let i = 1; i < candles.length; i++) {
+    const dir = candles[i].c > candles[i - 1].c ? 1 : candles[i].c < candles[i - 1].c ? -1 : 0;
+    out[i] = out[i - 1] + dir * candles[i].v;
+  }
+  return out;
+}
+
+/* ============================================================
+   Signal engine — twelve weighted components, score −100…+100
+   ============================================================ */
+function analyze(candles) {
+  const closes = candles.map(c => c.c);
+  const i = candles.length - 1;
+  const price = closes[i];
+
+  const e20 = ema(closes, 20), e50 = ema(closes, 50), e200 = ema(closes, 200);
+  const r = rsi(closes, 14);
+  const m = macd(closes);
+  const bb = bollinger(closes, 20, 2);
+  const a = atr(candles, 14);
+  const st = stochastic(candles, 14, 3);
+  const ob = obv(candles);
+  const volSma = sma(candles.map(c => c.v), 20);
+
+  const atrNow = a[i] ?? price * 0.01;
+  const atrPct = (atrNow / price) * 100;
+  const comps = [];
+  const add = (name, reading, pts) => {
+    pts = clamp(pts, -14, 14);
+    comps.push({ name, reading, pts, verdict: pts > 1 ? "bull" : pts < -1 ? "bear" : "flat" });
+  };
+
+  // --- trend (structure) ---
+  add("Price vs EMA200", price >= (e200[i] ?? price) ? "above long-term trend" : "below long-term trend",
+      e200[i] == null ? 0 : (price >= e200[i] ? 10 : -10));
+  add("EMA20 vs EMA50", (e20[i] ?? 0) >= (e50[i] ?? 0) ? "fast above slow" : "fast below slow",
+      (e20[i] == null || e50[i] == null) ? 0 : (e20[i] >= e50[i] ? 10 : -10));
+  add("EMA50 vs EMA200 (regime)", (e50[i] ?? 0) >= (e200[i] ?? 0) ? "bull regime" : "bear regime",
+      (e50[i] == null || e200[i] == null) ? 0 : (e50[i] >= e200[i] ? 8 : -8));
+  {
+    let pts = 0, reading = "insufficient data";
+    if (e20[i] != null && e20[i - 5] != null) {
+      const slopePct = ((e20[i] - e20[i - 5]) / e20[i - 5]) * 100;
+      pts = clamp(slopePct / Math.max(atrPct * 0.5, 0.05), -1, 1) * 7;
+      reading = (slopePct >= 0 ? "+" : "") + slopePct.toFixed(2) + "% / 5 bars";
+    }
+    add("EMA20 slope", reading, pts);
+  }
+
+  // --- momentum ---
+  {
+    const v = r[i];
+    let pts = 0, reading = "warming up";
+    if (v != null) {
+      pts = clamp((v - 50) / 25, -1, 1) * 12;
+      if (v > 78 || v < 22) pts *= 0.3;  // stretched — fade the extreme
+      reading = v.toFixed(1) + (v > 70 ? " (overbought)" : v < 30 ? " (oversold)" : "");
+    }
+    add("RSI 14", reading, pts);
+  }
+  {
+    let pts = 0, reading = "warming up";
+    if (m.line[i] != null && m.signal[i] != null) {
+      const diff = m.line[i] - m.signal[i];
+      pts = clamp(diff / (0.5 * atrNow), -1, 1) * 12;
+      reading = diff >= 0 ? "line above signal" : "line below signal";
+    }
+    add("MACD cross", reading, pts);
+  }
+  {
+    let pts = 0, reading = "warming up";
+    if (m.hist[i] != null && m.hist[i - 3] != null) {
+      const d = m.hist[i] - m.hist[i - 3];
+      pts = clamp(d / (0.3 * atrNow), -1, 1) * 6;
+      reading = d >= 0 ? "histogram expanding up" : "histogram expanding down";
+    }
+    add("MACD momentum", reading, pts);
+  }
+  {
+    let pts = 0, reading = "insufficient data";
+    if (closes[i - 10] != null) {
+      const roc = ((price - closes[i - 10]) / closes[i - 10]) * 100;
+      pts = clamp(roc / (2 * atrPct), -1, 1) * 5;
+      reading = (roc >= 0 ? "+" : "") + roc.toFixed(2) + "% / 10 bars";
+    }
+    add("Rate of change (10)", reading, pts);
+  }
+
+  // --- mean reversion / volatility ---
+  {
+    let pts = 0, reading = "warming up", pb = null;
+    if (bb.upper[i] != null && bb.upper[i] !== bb.lower[i]) {
+      pb = (price - bb.lower[i]) / (bb.upper[i] - bb.lower[i]);
+      if (pb > 0.95) { pts = -6; reading = "%B " + pb.toFixed(2) + " — overextended"; }
+      else if (pb < 0.05) { pts = 6; reading = "%B " + pb.toFixed(2) + " — washed out"; }
+      else { pts = (pb - 0.5) * 8; reading = "%B " + pb.toFixed(2); }
+    }
+    add("Bollinger %B", reading, pts);
+  }
+  {
+    let pts = 0, reading = "warming up";
+    if (st.k[i] != null && st.d[i] != null) {
+      const bullCross = st.k[i] > st.d[i];
+      if (bullCross && st.k[i] < 80) pts = 5;
+      else if (!bullCross && st.k[i] > 20) pts = -5;
+      else pts = bullCross ? 2 : -2;
+      reading = "%K " + st.k[i].toFixed(0) + (bullCross ? " > %D" : " < %D");
+    }
+    add("Stochastic 14,3", reading, pts);
+  }
+
+  // --- volume ---
+  {
+    let pts = 0, reading = "insufficient data";
+    if (i >= 10) {
+      const obvSlope = ob[i] - ob[i - 10];
+      const priceSlope = price - closes[i - 10];
+      pts = (obvSlope >= 0 ? 8 : -8);
+      if (Math.sign(obvSlope) !== Math.sign(priceSlope) && priceSlope !== 0) {
+        pts *= 0.5;
+        reading = (obvSlope >= 0 ? "rising" : "falling") + " — diverging from price";
+      } else {
+        reading = obvSlope >= 0 ? "rising with price" : "falling with price";
+      }
+    }
+    add("OBV flow (10)", reading, pts);
+  }
+  {
+    let pts = 0, reading = "warming up";
+    if (volSma[i] != null && volSma[i] > 0) {
+      const ratio = candles[i].v / volSma[i];
+      const dir = Math.sign(candles[i].c - candles[i].o);
+      if (ratio > 1.3 && dir !== 0) pts = dir * Math.min((ratio - 1) * 7, 7);
+      reading = ratio.toFixed(2) + "× 20-bar average";
+    }
+    add("Volume thrust", reading, pts);
+  }
+
+  const score = Math.round(clamp(comps.reduce((s, c) => s + c.pts, 0), -100, 100));
+  const label = score >= 45 ? "STRONG LONG" : score >= 18 ? "LONG"
+              : score <= -45 ? "STRONG SHORT" : score <= -18 ? "SHORT" : "NEUTRAL";
+  const bulls = comps.filter(c => c.verdict === "bull").length;
+  const bears = comps.filter(c => c.verdict === "bear").length;
+  const agree = Math.max(bulls, bears) / Math.max(bulls + bears, 1);
+  const conviction = Math.round(clamp(30 + Math.abs(score) * 0.5 + agree * 20, 5, 95));
+
+  return { price, score, label, conviction, bulls, bears, comps,
+           e20, e50, e200, rsi: r, macd: m, bb, atrArr: a, atrNow, atrPct, stoch: st };
+}
+
+/* Trade plan: ATR-anchored levels + fixed-fractional position sizing. */
+function tradePlan(an, tf, capital, riskPct) {
+  const dir = an.score >= 18 ? 1 : an.score <= -18 ? -1 : 0;
+  const strong = Math.abs(an.score) >= 45;
+  const entry = an.price;
+  const stopMult = 1.5, tgtMult = strong ? 3.5 : 2.5;
+  const stopDist = stopMult * an.atrNow;
+  const tgtDist = tgtMult * an.atrNow;
+  const stop = entry - dir * stopDist;
+  const target = entry + dir * tgtDist;
+  const rr = tgtMult / stopMult;
+
+  const riskAmt = capital * riskPct;
+  let qty = stopDist > 0 ? riskAmt / stopDist : 0;
+  let notional = qty * entry;
+  let capped = false;
+  const maxNotional = capital * 5;                 // hard 5× exposure cap
+  if (notional > maxNotional) { qty = maxNotional / entry; notional = maxNotional; capped = true; }
+  const leverage = notional / capital;
+  const profitAtTarget = qty * tgtDist;
+
+  const tfMin = TIMEFRAMES[tf].minutes;
+  const bars = tgtDist / (0.65 * an.atrNow);       // expected bars to cover the target at typical range
+  const holdLo = bars * 0.7 * tfMin, holdHi = bars * 1.7 * tfMin;
+
+  return { dir, strong, entry, stop, target, rr, stopDist, tgtDist,
+           riskAmt, qty, notional, leverage, capped, profitAtTarget, holdLo, holdHi };
+}
+
+/* ============================================================
+   SVG chart engine — hairline grid, 2px lines, crosshair tooltip
+   ============================================================ */
+const SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  return n;
+}
+function niceTicks(min, max, count = 5) {
+  if (!isFinite(min) || !isFinite(max) || min === max) { min -= 1; max += 1; }
+  const span = max - min;
+  const step0 = span / count;
+  const mag = 10 ** Math.floor(Math.log10(step0));
+  const norm = step0 / mag;
+  const step = (norm >= 5 ? 10 : norm >= 2 ? 5 : norm >= 1 ? 2 : 1) * mag;
+  const ticks = [];
+  for (let t = Math.ceil(min / step) * step; t <= max + step * 1e-9; t += step) ticks.push(t);
+  return ticks;
+}
+
+/**
+ * renderChart(container, tooltipNode, cfg)
+ * cfg: { times, tf, height, series:[{name,color,values,width,dash}], band:{upper,lower,color},
+ *        bars:{values,posColor,negColor}, yRefs:[{v,label}], yFmt, zeroLine, endLabel }
+ * All series arrays are the SHOWN window, same length as times.
+ */
+function renderChart(container, tooltipNode, cfg) {
+  clear(container);
+  const W = 900, H = cfg.height || 260;
+  const padL = 8, padR = 62, padT = 12, padB = 24;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const n = cfg.times.length;
+  if (n < 2) return;
+
+  let lo = Infinity, hi = -Infinity;
+  const scan = (arr) => { for (const v of arr) if (v != null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } };
+  (cfg.series || []).forEach(s => scan(s.values));
+  if (cfg.band) { scan(cfg.band.upper); scan(cfg.band.lower); }
+  if (cfg.bars) scan(cfg.bars.values);
+  (cfg.yRefs || []).forEach(rf => { lo = Math.min(lo, rf.v); hi = Math.max(hi, rf.v); });
+  if (cfg.zeroLine) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  if (cfg.yDomain) { lo = cfg.yDomain[0]; hi = cfg.yDomain[1]; }
+  const padY = (hi - lo) * 0.06 || 1;
+  if (!cfg.yDomain) { lo -= padY; hi += padY; }
+
+  const x = (idx) => padL + (idx / (n - 1)) * plotW;
+  const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * plotH;
+  const yFmt = cfg.yFmt || fmtPrice;
+
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart-svg", role: "img" });
+  svg.style.aspectRatio = `${W} / ${H}`;
+
+  // gridlines + y ticks (solid hairlines, recessive)
+  const gridColor = getCss("--grid"), axisColor = getCss("--axis"), muted = getCss("--text-muted");
+  for (const t of niceTicks(lo, hi, 5)) {
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y(t), y2: y(t), stroke: gridColor, "stroke-width": 1 }));
+    const lbl = svgEl("text", { x: padL + plotW + 6, y: y(t) + 3.5, fill: muted, "font-size": 10.5 });
+    lbl.style.fontVariantNumeric = "tabular-nums";
+    lbl.textContent = yFmt(t);
+    svg.appendChild(lbl);
+  }
+  // x labels (5 evenly spaced)
+  for (let k = 0; k < 5; k++) {
+    const idx = Math.round((k / 4) * (n - 1));
+    const lbl = svgEl("text", { x: x(idx), y: H - 7, fill: muted, "font-size": 10.5, "text-anchor": k === 0 ? "start" : k === 4 ? "end" : "middle" });
+    lbl.textContent = fmtTime(cfg.times[idx], cfg.tf);
+    svg.appendChild(lbl);
+  }
+  // baseline
+  svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: padT + plotH, y2: padT + plotH, stroke: axisColor, "stroke-width": 1 }));
+
+  // reference lines (RSI 30/70, MACD zero)
+  for (const rf of cfg.yRefs || []) {
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y(rf.v), y2: y(rf.v), stroke: axisColor, "stroke-width": 1 }));
+  }
+  if (cfg.zeroLine) {
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y(0), y2: y(0), stroke: axisColor, "stroke-width": 1 }));
+  }
+
+  // band wash (Bollinger) — series hue at ~10%
+  if (cfg.band) {
+    let dTop = "";
+    for (let idx = 0; idx < n; idx++) {
+      const u = cfg.band.upper[idx], l = cfg.band.lower[idx];
+      if (u == null || l == null) continue;
+      dTop += (dTop ? "L" : "M") + x(idx).toFixed(1) + " " + y(u).toFixed(1);
+    }
+    // bottom edge traced right-to-left closes the ribbon
+    let back = "";
+    for (let idx = n - 1; idx >= 0; idx--) {
+      const l = cfg.band.lower[idx];
+      if (l == null) continue;
+      back += "L" + x(idx).toFixed(1) + " " + y(l).toFixed(1);
+    }
+    if (dTop && back) {
+      const p = svgEl("path", { d: dTop + back + "Z", fill: cfg.band.color, "fill-opacity": 0.10, stroke: "none" });
+      svg.appendChild(p);
+    }
+  }
+
+  // histogram bars (MACD) — diverging around zero, 2px surface gap
+  if (cfg.bars) {
+    const slot = plotW / n;
+    const bw = Math.min(Math.max(slot - 2, 1), 24);
+    const y0 = y(0);
+    for (let idx = 0; idx < n; idx++) {
+      const v = cfg.bars.values[idx];
+      if (v == null) continue;
+      const yy = y(v);
+      const top = Math.min(yy, y0), h = Math.max(Math.abs(yy - y0), 0.5);
+      svg.appendChild(svgEl("rect", {
+        x: (x(idx) - bw / 2).toFixed(1), y: top.toFixed(1), width: bw.toFixed(1), height: h.toFixed(1),
+        rx: Math.min(2, bw / 2), fill: v >= 0 ? cfg.bars.posColor : cfg.bars.negColor,
+      }));
+    }
+  }
+
+  // line series (2px, round joins)
+  for (const s of cfg.series || []) {
+    let d = "", pen = false;
+    for (let idx = 0; idx < n; idx++) {
+      const v = s.values[idx];
+      if (v == null || !isFinite(v)) { pen = false; continue; }
+      d += (pen ? "L" : "M") + x(idx).toFixed(1) + " " + y(v).toFixed(1);
+      pen = true;
+    }
+    if (!d) continue;
+    const attrs = { d, fill: "none", stroke: s.color, "stroke-width": s.width || 2, "stroke-linejoin": "round", "stroke-linecap": "round" };
+    svg.appendChild(svgEl("path", attrs));
+  }
+
+  // selective direct label: endpoint of the first series, with a surface-ringed end dot
+  if (cfg.endLabel && cfg.series && cfg.series.length) {
+    const s0 = cfg.series[0];
+    const vEnd = s0.values[n - 1];
+    if (vEnd != null) {
+      svg.appendChild(svgEl("circle", { cx: x(n - 1), cy: y(vEnd), r: 4.5, fill: s0.color, stroke: getCss("--surface-1"), "stroke-width": 2 }));
+      const lbl = svgEl("text", { x: padL + plotW + 6, y: clamp(y(vEnd) + 3.5, padT + 8, padT + plotH - 2), fill: getCss("--text-primary"), "font-size": 11, "font-weight": 700 });
+      lbl.style.fontVariantNumeric = "tabular-nums";
+      lbl.textContent = yFmt(vEnd);
+      svg.appendChild(lbl);
+    }
+  }
+
+  // crosshair + tooltip: the whole plot is the hit target, snapping to nearest X
+  const cross = svgEl("line", { x1: 0, x2: 0, y1: padT, y2: padT + plotH, stroke: axisColor, "stroke-width": 1, visibility: "hidden" });
+  svg.appendChild(cross);
+  const hit = svgEl("rect", { x: padL, y: padT, width: plotW, height: plotH, fill: "transparent" });
+  svg.appendChild(hit);
+
+  const showTip = (clientX, clientY) => {
+    const rect = svg.getBoundingClientRect();
+    const sx = (clientX - rect.left) * (W / rect.width);
+    const idx = clamp(Math.round(((sx - padL) / plotW) * (n - 1)), 0, n - 1);
+    cross.setAttribute("x1", x(idx)); cross.setAttribute("x2", x(idx));
+    cross.setAttribute("visibility", "visible");
+
+    clear(tooltipNode);
+    tooltipNode.appendChild(el("div", "t-date", fmtTime(cfg.times[idx], cfg.tf)));
+    const rows = [];
+    for (const s of cfg.series || []) if (s.values[idx] != null) rows.push({ name: s.name, color: s.color, val: yFmt(s.values[idx]) });
+    if (cfg.bars && cfg.bars.values[idx] != null)
+      rows.push({ name: cfg.bars.name || "Histogram", color: cfg.bars.values[idx] >= 0 ? cfg.bars.posColor : cfg.bars.negColor, val: yFmt(cfg.bars.values[idx]) });
+    if (cfg.band && cfg.band.upper[idx] != null) {
+      rows.push({ name: "BB upper", color: cfg.band.color, val: yFmt(cfg.band.upper[idx]) });
+      rows.push({ name: "BB lower", color: cfg.band.color, val: yFmt(cfg.band.lower[idx]) });
+    }
+    for (const rw of rows) {
+      const r = el("div", "t-row");
+      const key = el("span", "t-key"); key.style.background = rw.color;
+      r.appendChild(key);
+      r.appendChild(el("span", "t-name", rw.name));
+      r.appendChild(el("span", "t-val", rw.val));
+      tooltipNode.appendChild(r);
+    }
+    tooltipNode.style.display = "block";
+    const card = tooltipNode.parentElement.getBoundingClientRect();
+    const tw = tooltipNode.offsetWidth;
+    let left = clientX - card.left + 14;
+    if (left + tw > card.width - 8) left = clientX - card.left - tw - 14;
+    tooltipNode.style.left = Math.max(8, left) + "px";
+    tooltipNode.style.top = clamp(clientY - card.top - 20, 8, card.height - 60) + "px";
+  };
+  const hideTip = () => { cross.setAttribute("visibility", "hidden"); tooltipNode.style.display = "none"; };
+  hit.addEventListener("pointermove", (e) => showTip(e.clientX, e.clientY));
+  hit.addEventListener("pointerleave", hideTip);
+  hit.setAttribute("tabindex", "0");
+  hit.addEventListener("focus", () => {
+    const rect = svg.getBoundingClientRect();
+    showTip(rect.left + rect.width - 40, rect.top + rect.height / 2);
+  });
+  hit.addEventListener("blur", hideTip);
+
+  container.appendChild(svg);
+}
+function getCss(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function sparkline(closes, color) {
+  const w = 190, h = 34, n = closes.length;
+  const svg = svgEl("svg", { viewBox: `0 0 ${w} ${h}`, width: w, height: h, class: "spark", "aria-hidden": "true" });
+  let lo = Math.min(...closes), hi = Math.max(...closes);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  let d = "";
+  for (let i = 0; i < n; i++) {
+    const px = (i / (n - 1)) * (w - 6) + 3;
+    const py = 3 + (1 - (closes[i] - lo) / (hi - lo)) * (h - 6);
+    d += (i ? "L" : "M") + px.toFixed(1) + " " + py.toFixed(1);
+  }
+  svg.appendChild(svgEl("path", { d, fill: "none", stroke: color, "stroke-width": 1.5, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  return svg;
+}
+
+/* ============================================================
+   Rendering
+   ============================================================ */
+function verdictClass(label) {
+  return label.includes("LONG") ? "long" : label.includes("SHORT") ? "short" : "flat";
+}
+function verdictArrow(label) {
+  return label.includes("LONG") ? "▲" : label.includes("SHORT") ? "▼" : "◆";
+}
+
+function renderOverview(results) {
+  const box = $("overview");
+  clear(box);
+  for (const { asset, entry, an } of results) {
+    const card = el("button", "asset-card" + (asset.id === state.asset ? " selected" : ""));
+    card.type = "button";
+    card.addEventListener("click", () => {
+      state.asset = asset.id;
+      // instant visual feedback even while a refresh is in flight
+      for (const c of $("overview").children) c.classList.toggle("selected", c === card);
+      refresh(false);
+    });
+
+    const row1 = el("div", "row1");
+    row1.appendChild(el("span", "name", asset.name));
+    row1.appendChild(el("span", "tick", asset.id + "/USD"));
+    card.appendChild(row1);
+
+    card.appendChild(el("div", "price", fmtUsd(an.price)));
+
+    const closes = entry.candles.map(c => c.c);
+    const barsPerDay = Math.max(1, Math.round(1440 / TIMEFRAMES[state.tf].minutes));
+    const ref = closes[closes.length - 1 - Math.min(barsPerDay, closes.length - 1)];
+    const chg = ((an.price - ref) / ref) * 100;
+    const delta = el("span", "delta " + (chg >= 0 ? "up" : "down"),
+      (chg >= 0 ? "▲ +" : "▼ ") + chg.toFixed(2) + "% / 24h");
+    card.appendChild(delta);
+
+    card.appendChild(sparkline(closes.slice(-40), getCss("--series-1")));
+
+    const chip = el("span", "sig-chip " + verdictClass(an.label));
+    chip.appendChild(el("span", "", verdictArrow(an.label)));
+    chip.appendChild(el("span", "", an.label + " · " + (an.score > 0 ? "+" : "") + an.score));
+    card.appendChild(chip);
+
+    box.appendChild(card);
+  }
+}
+
+function renderHero(asset, an, mtf) {
+  $("heroAsset").textContent = asset.name + " (" + asset.id + "/USD) · " + TIMEFRAMES[state.tf].label + " chart · " + fmtUsd(an.price);
+  const v = $("heroVerdict");
+  v.textContent = verdictArrow(an.label) + " " + an.label;
+  v.className = "hero-verdict " + verdictClass(an.label);
+
+  const scoreTxt = (an.score > 0 ? "+" : "") + an.score;
+  $("heroSub").textContent =
+    "Composite score " + scoreTxt + " / ±100 · model conviction " + an.conviction + "% · " +
+    an.bulls + " bullish vs " + an.bears + " bearish signals. " +
+    (an.label === "NEUTRAL"
+      ? "No edge either way right now — the highest-EV move is to wait for the score to break past ±18."
+      : "ATR volatility " + an.atrPct.toFixed(2) + "% per bar sets the stop and target below.");
+
+  const fill = $("meterFill");
+  const pct = Math.abs(an.score) / 2;             // half-track max
+  fill.style.width = pct + "%";
+  fill.style.background = an.score >= 0 ? getCss("--status-good") : getCss("--status-critical");
+  if (an.score >= 0) { fill.style.left = "50%"; fill.style.right = "auto"; }
+  else { fill.style.right = "50%"; fill.style.left = "auto"; }
+
+  // multi-timeframe chips
+  const chips = $("mtfChips");
+  clear(chips);
+  let bullTf = 0, bearTf = 0;
+  for (const { tf, an: a } of mtf) {
+    const chip = el("span", "chip");
+    chip.appendChild(el("span", "", TIMEFRAMES[tf].label));
+    const vv = el("span", "v " + verdictClass(a.label), verdictArrow(a.label) + " " + a.label + " (" + (a.score > 0 ? "+" : "") + a.score + ")");
+    chip.appendChild(vv);
+    chips.appendChild(chip);
+    if (a.label.includes("LONG")) bullTf++;
+    else if (a.label.includes("SHORT")) bearTf++;
+  }
+  const total = mtf.length;
+  let note;
+  if (bullTf >= 3) note = bullTf + "/" + total + " timeframes bullish — trend alignment favors longs; pullbacks toward EMA20 are the higher-quality entries.";
+  else if (bearTf >= 3) note = bearTf + "/" + total + " timeframes bearish — alignment favors shorts; rallies into EMA20 are the higher-quality entries.";
+  else if (bullTf === bearTf) note = "Timeframes disagree — a classic chop regime. Reduce size or wait for alignment; forcing trades here is where accounts bleed.";
+  else if (bullTf > bearTf) note = "Mild bullish tilt across timeframes, but not full alignment — treat longs as lower-conviction and size down.";
+  else note = "Mild bearish tilt across timeframes, but not full alignment — treat shorts as lower-conviction and size down.";
+  $("mtfNote").textContent = note;
+}
+
+function renderPlan(asset, an, plan) {
+  $("planTitle").textContent = "Trade plan — " + asset.id + "/USD · " + TIMEFRAMES[state.tf].label + " (" + TIMEFRAMES[state.tf].style + ")";
+  const tiles = $("planTiles");
+  clear(tiles);
+  const tile = (lbl, val, note, valColor) => {
+    const t = el("div", "tile");
+    t.appendChild(el("div", "lbl", lbl));
+    const v = el("div", "val", val);
+    if (valColor) v.style.color = valColor;
+    t.appendChild(v);
+    if (note) t.appendChild(el("div", "note", note));
+    tiles.appendChild(t);
+  };
+
+  if (plan.dir === 0) {
+    $("planSub").textContent = "Score is inside the neutral band (−18…+18): the engine sees no exploitable edge on this timeframe right now.";
+    tile("Action", "STAND ASIDE", "wait for score to break ±18", getCss("--text-secondary"));
+    tile("Trigger to go long", "score ≥ +18", "recheck after the next bar close");
+    tile("Trigger to go short", "score ≤ −18", "recheck after the next bar close");
+    tile("Volatility (ATR)", fmtUsd(an.atrNow), an.atrPct.toFixed(2) + "% per bar");
+    $("planCaveat").textContent = "Flat is a position. The costliest habit in trading is forcing entries in a no-edge regime — capital preserved here funds the aligned setups later.";
+    return;
+  }
+
+  const dirTxt = plan.dir > 0 ? "LONG" : "SHORT";
+  const dirColor = plan.dir > 0 ? getCss("--status-good") : getCss("--status-critical");
+  $("planSub").textContent =
+    "Levels are anchored to the 14-bar ATR (" + fmtUsd(an.atrNow) + ", " + an.atrPct.toFixed(2) + "% per bar): stop 1.5×ATR, target " +
+    (plan.strong ? "3.5" : "2.5") + "×ATR, sized so a stop-out costs exactly your risk budget.";
+
+  tile("Direction", (plan.dir > 0 ? "▲ " : "▼ ") + dirTxt, plan.strong ? "strong signal" : "standard signal", dirColor);
+  tile("Entry (market)", fmtUsd(plan.entry), "or a limit slightly better");
+  tile("Stop loss", fmtUsd(plan.stop), "1.5×ATR — always place it");
+  tile("Take profit", fmtUsd(plan.target), (plan.strong ? "3.5" : "2.5") + "×ATR");
+  tile("Reward : risk", plan.rr.toFixed(2) + " : 1", "before fees/funding");
+  tile("Expected hold", fmtDuration(plan.holdLo) + " – " + fmtDuration(plan.holdHi), "exit at stop/target if sooner");
+  tile("Position size", fmtNum(plan.qty, plan.entry >= 1000 ? 4 : 2) + " " + asset.id, "≈ " + fmtMoney(plan.notional) + " notional");
+  tile("Capital at risk", fmtMoney(plan.riskAmt), (state.riskPct * 100).toFixed(1) + "% of " + fmtMoney(state.capital));
+  tile("Leverage implied", plan.leverage <= 1.01 ? "1× (spot works)" : plan.leverage.toFixed(1) + "×", plan.capped ? "capped at 5× — risk reduced" : "keep it under 5×");
+  tile("Profit at target", "+" + fmtMoney(plan.profitAtTarget), "if stop honored: −" + fmtMoney(plan.riskAmt));
+
+  $("planCaveat").textContent =
+    "Execution notes: enter on the current bar close or a small pullback; the stop is non-negotiable — the sizing math assumes it. " +
+    "Move the stop to break-even after price travels 1×ATR in your favor. If the score flips sign before target, exit early. " +
+    "Funding rates on perpetuals eat into holds longer than ~2 days — prefer spot for the 1D timeframe when long.";
+}
+
+function renderCharts(asset, an, candles) {
+  const s = candles.length - SHOWN;
+  const win = (arr) => arr.slice(s);
+  const times = win(candles.map(c => c.t));
+  const closes = win(candles.map(c => c.c));
+
+  $("priceTitle").textContent = asset.name + " price — last " + SHOWN + " × " + TIMEFRAMES[state.tf].label + " bars";
+
+  // legend for the multi-series price chart
+  const leg = $("priceLegend");
+  clear(leg);
+  const legItem = (name, color, rect) => {
+    const it = el("span", "item");
+    const key = el("span", rect ? "key-rect" : "key-line");
+    key.style.background = color;
+    if (rect) key.style.opacity = "0.35";
+    it.appendChild(key);
+    it.appendChild(el("span", "", name));
+    leg.appendChild(it);
+  };
+  legItem("Close", getCss("--series-1"));
+  legItem("EMA 20", getCss("--series-2"));
+  legItem("EMA 50", getCss("--series-3"));
+  legItem("EMA 200", getCss("--series-4"));
+  legItem("Bollinger 20,2", getCss("--series-1"), true);
+
+  renderChart($("priceChart"), $("priceTip"), {
+    times, tf: state.tf, height: 300, endLabel: true,
+    band: { upper: win(an.bb.upper), lower: win(an.bb.lower), color: getCss("--series-1") },
+    series: [
+      { name: "Close",  color: getCss("--series-1"), values: closes },
+      { name: "EMA 20",  color: getCss("--series-2"), values: win(an.e20) },
+      { name: "EMA 50",  color: getCss("--series-3"), values: win(an.e50) },
+      { name: "EMA 200", color: getCss("--series-4"), values: win(an.e200) },
+    ],
+  });
+
+  renderChart($("rsiChart"), $("rsiTip"), {
+    times, tf: state.tf, height: 170, yDomain: [0, 100],
+    yRefs: [{ v: 30 }, { v: 70 }],
+    yFmt: (v) => v.toFixed(0),
+    series: [{ name: "RSI 14", color: getCss("--series-1"), values: win(an.rsi) }],
+  });
+
+  const macdLeg = $("macdLegend");
+  clear(macdLeg);
+  const mk = (name, color, rect) => {
+    const it = el("span", "item");
+    const key = el("span", rect ? "key-rect" : "key-line");
+    key.style.background = color;
+    it.appendChild(key);
+    it.appendChild(el("span", "", name));
+    macdLeg.appendChild(it);
+  };
+  mk("MACD line", getCss("--series-1"));
+  mk("Signal", getCss("--series-3"));
+  mk("Histogram +", getCss("--div-pos"), true);
+  mk("Histogram −", getCss("--div-neg"), true);
+
+  renderChart($("macdChart"), $("macdTip"), {
+    times, tf: state.tf, height: 190, zeroLine: true,
+    yFmt: (v) => fmtCompact(v),
+    bars: { name: "Histogram", values: win(an.macd.hist), posColor: getCss("--div-pos"), negColor: getCss("--div-neg") },
+    series: [
+      { name: "MACD",   color: getCss("--series-1"), values: win(an.macd.line) },
+      { name: "Signal", color: getCss("--series-3"), values: win(an.macd.signal) },
+    ],
+  });
+}
+
+function renderBreakdown(an) {
+  const tbody = $("breakdownTable").querySelector("tbody");
+  clear(tbody);
+  for (const c of an.comps) {
+    const tr = el("tr");
+    tr.appendChild(el("td", "", c.name));
+    tr.appendChild(el("td", "", c.reading));
+    const vtd = el("td");
+    const vc = el("span", "verdict-cell " + c.verdict);
+    vc.appendChild(el("span", "dot"));
+    vc.appendChild(el("span", "", c.verdict === "bull" ? "Bullish" : c.verdict === "bear" ? "Bearish" : "Neutral"));
+    vtd.appendChild(vc);
+    tr.appendChild(vtd);
+    tr.appendChild(el("td", "num", (c.pts > 0 ? "+" : "") + c.pts.toFixed(1)));
+    tbody.appendChild(tr);
+  }
+  const tr = el("tr");
+  const b = el("td", "", "Composite score");
+  b.style.fontWeight = "700";
+  tr.appendChild(b);
+  tr.appendChild(el("td", "", ""));
+  const vtd = el("td");
+  const vc = el("span", "verdict-cell " + (an.score >= 18 ? "bull" : an.score <= -18 ? "bear" : "flat"));
+  vc.appendChild(el("span", "dot"));
+  vc.appendChild(el("span", "", an.label));
+  vtd.appendChild(vc);
+  tr.appendChild(vtd);
+  const tot = el("td", "num", (an.score > 0 ? "+" : "") + an.score);
+  tot.style.fontWeight = "700";
+  tr.appendChild(tot);
+  tbody.appendChild(tr);
+}
+
+function renderDataTable(asset, an, candles) {
+  $("dataTableSub").textContent = asset.name + " — last 30 bars (" + TIMEFRAMES[state.tf].label + "), the accessible twin of the charts above.";
+  const tbody = $("dataTable").querySelector("tbody");
+  clear(tbody);
+  const s = Math.max(0, candles.length - 30);
+  for (let i = candles.length - 1; i >= s; i--) {
+    const c = candles[i];
+    const tr = el("tr");
+    tr.appendChild(el("td", "", fmtTime(c.t, state.tf)));
+    tr.appendChild(el("td", "num", fmtPrice(c.o)));
+    tr.appendChild(el("td", "num", fmtPrice(c.h)));
+    tr.appendChild(el("td", "num", fmtPrice(c.l)));
+    tr.appendChild(el("td", "num", fmtPrice(c.c)));
+    tr.appendChild(el("td", "num", fmtCompact(c.v)));
+    tr.appendChild(el("td", "num", an.rsi[i] != null ? an.rsi[i].toFixed(1) : "—"));
+    tr.appendChild(el("td", "num", an.macd.hist[i] != null ? fmtCompact(an.macd.hist[i]) : "—"));
+    tbody.appendChild(tr);
+  }
+}
+
+/* ============================================================
+   Orchestration
+   ============================================================ */
+let refreshing = false, queuedRefresh = false;
+async function refresh(hard) {
+  if (refreshing) { queuedRefresh = true; return; }   // never drop a request — replay it after
+  refreshing = true;
+  document.querySelectorAll(".card, .overview").forEach(n => n.classList.add("fading"));
+  try {
+    if (hard) state.data.clear();
+    // decay failure counts so a blocked source is re-probed once per cycle, not hammered
+    for (const [name, n] of sourceFails) if (n > 0) sourceFails.set(name, n - 1);
+
+    // probe with the selected asset first: it warms the source-health map, so the
+    // parallel burst below goes straight to a source that actually answers
+    await getCandles(state.asset, state.tf);
+
+    // one parallel burst: all assets on the selected timeframe (overview)
+    // plus the selected asset on every timeframe (consensus)
+    const [results, mtf] = await Promise.all([
+      Promise.all(ASSETS.map(async (asset) => {
+        const entry = await getCandles(asset.id, state.tf);
+        return { asset, entry, an: analyze(entry.candles) };
+      })),
+      Promise.all(Object.keys(TIMEFRAMES).map(async (tf) => {
+        const entry = await getCandles(state.asset, tf);
+        return { tf, an: analyze(entry.candles) };
+      })),
+    ]);
+
+    const sel = results.find(r => r.asset.id === state.asset);
+    const { asset, entry, an } = sel;
+    const plan = tradePlan(an, state.tf, state.capital, state.riskPct);
+
+    renderOverview(results);
+    renderHero(asset, an, mtf);
+    renderPlan(asset, an, plan);
+    renderCharts(asset, an, entry.candles);
+    renderBreakdown(an);
+    renderDataTable(asset, an, entry.candles);
+
+    const sources = new Set(results.map(r => r.entry.source));
+    const badge = $("srcBadge");
+    if (sources.has("Simulated") && sources.size === 1) {
+      badge.className = "src-badge demo";
+      $("srcText").textContent = "SIMULATED DATA — live feeds unreachable";
+    } else {
+      badge.className = "src-badge live";
+      $("srcText").textContent = "LIVE · " + [...sources].filter(s => s !== "Simulated").join(" + ") + (sources.has("Simulated") ? " (partial sim)" : "");
+    }
+    $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (err) {
+    $("srcText").textContent = "error — retrying next cycle";
+  } finally {
+    document.querySelectorAll(".card, .overview").forEach(n => n.classList.remove("fading"));
+    refreshing = false;
+    if (queuedRefresh) { queuedRefresh = false; refresh(false); }
+  }
+}
+
+function wireControls() {
+  $("tfGroup").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-tf]");
+    if (!btn) return;
+    state.tf = btn.dataset.tf;
+    for (const b of $("tfGroup").querySelectorAll("button")) b.classList.toggle("active", b === btn);
+    refresh(false);
+  });
+  $("capital").addEventListener("change", () => {
+    const v = parseFloat($("capital").value);
+    if (isFinite(v) && v > 0) { state.capital = v; refresh(false); }
+  });
+  $("riskPct").addEventListener("change", () => {
+    state.riskPct = parseFloat($("riskPct").value);
+    refresh(false);
+  });
+  $("tableToggle").addEventListener("change", () => {
+    $("dataTableCard").classList.toggle("hidden", !$("tableToggle").checked);
+  });
+  $("refreshBtn").addEventListener("click", () => refresh(true));
+
+  let resizeT = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeT);
+    resizeT = setTimeout(() => refresh(false), 250);
+  });
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => refresh(false));
+}
+
+wireControls();
+refresh(true);
+state.refreshTimer = setInterval(() => refresh(true), REFRESH_MS);
+</script>
+</body>
+</html>

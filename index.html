@@ -208,6 +208,43 @@
   .table-wrap { overflow-x: auto; }
   .hidden { display: none; }
 
+  /* ---------- actions, buttons, links ---------- */
+  .plan-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
+  button.btn {
+    font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+    padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary);
+  }
+  button.btn:hover { background: var(--chip); }
+  button.btn.long { background: var(--status-good); border-color: var(--status-good); color: #fff; }
+  button.btn.short { background: var(--status-critical); border-color: var(--status-critical); color: #fff; }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  .link-row { font-size: 12px; color: var(--text-secondary); display: inline-flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .link-row a { color: var(--series-1); font-weight: 600; text-decoration: none; }
+  .link-row a:hover { text-decoration: underline; }
+  .pos-chip { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--text-secondary); white-space: nowrap; }
+  .pos-chip.win { background: rgba(12,163,12,0.12); color: var(--status-good); }
+  .pos-chip.loss { background: rgba(208,59,59,0.12); color: var(--status-critical); }
+  .pos-chip.open { background: var(--accent-soft); color: var(--series-1); }
+  td .mini-btn {
+    font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+    padding: 3px 9px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary);
+  }
+  td .mini-btn:hover { background: var(--chip); }
+
+  /* ---------- news ---------- */
+  .news-item { display: flex; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--grid); align-items: baseline; }
+  .news-item:last-child { border-bottom: none; }
+  .news-when { flex: none; width: 62px; font-size: 11px; color: var(--text-muted); }
+  .news-body { min-width: 0; }
+  a.news-title { font-size: 13px; font-weight: 600; color: var(--text-primary); text-decoration: none; }
+  a.news-title:hover { text-decoration: underline; }
+  span.news-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .news-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .news-tag { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--series-1); }
+  .empty-note { font-size: 12.5px; color: var(--text-muted); padding: 8px 0; }
+
   footer { font-size: 11.5px; color: var(--text-muted); margin-top: 26px; max-width: 90ch; }
 </style>
 </head>
@@ -274,12 +311,36 @@
     </div>
   </section>
 
+  <!-- market pulse -->
+  <section class="card">
+    <h2>Market pulse — what professional desks actually watch</h2>
+    <p class="sub">Funding rates and open interest reveal crowd positioning (crowded longs get squeezed); the Fear &amp; Greed index tracks sentiment extremes. Deliberately kept out of the backtested score so the accuracy numbers below stay honest — use this to size up, size down, or stand aside.</p>
+    <div class="tiles" id="pulseTiles"></div>
+    <p class="plan-caveat" id="pulseNote"></p>
+  </section>
+
   <!-- trade plan -->
   <section class="card">
     <h2 id="planTitle">Trade plan</h2>
     <p class="sub" id="planSub"></p>
     <div class="tiles" id="planTiles"></div>
     <p class="plan-caveat" id="planCaveat"></p>
+    <div class="plan-actions" id="planActions"></div>
+  </section>
+
+  <!-- paper trading -->
+  <section class="card">
+    <h2>Paper trading — track the desk's real accuracy</h2>
+    <p class="sub">Trades placed here are simulated and saved in this browser. No exchange API keys ever touch this page — a public static site cannot protect secrets, so real execution stays on the exchange via the links in the trade plan. Stops and targets settle against candle highs/lows on each refresh, so fills are close to (not exactly) live.</p>
+    <div class="tiles" id="paperStats"></div>
+    <div class="table-wrap"><table id="positionsTable">
+      <thead><tr>
+        <th>Asset</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th>
+        <th class="num">Size</th><th class="num">P&amp;L</th><th class="num">R</th><th>Status</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="plan-actions"><button class="btn" id="clearHistory" type="button">Clear closed trades</button></div>
   </section>
 
   <!-- charts -->
@@ -314,6 +375,22 @@
       <thead><tr><th>Signal</th><th>Reading</th><th>Verdict</th><th class="num">Points</th></tr></thead>
       <tbody></tbody>
     </table></div>
+  </section>
+
+  <!-- backtest -->
+  <section class="card chart-card">
+    <h2>Backtest — proving the engine on history</h2>
+    <p class="sub">Replays the exact same signal engine bar-by-bar over the fetched history with zero lookahead: entries fill on the next bar's open, and when a bar touches both stop and target the stop counts first (the conservative assumption). Excludes fees, funding and slippage — live results will be somewhat worse.</p>
+    <button class="btn" id="runBacktest" type="button">Run backtest</button>
+    <div id="btResults"></div>
+    <div class="tooltip" id="btTip"></div>
+  </section>
+
+  <!-- news -->
+  <section class="card">
+    <h2>Crypto news</h2>
+    <p class="sub">Headlines move crypto faster than any indicator — before acting on a signal, check whether a story invalidates the setup. Tags mark which of your four assets a headline touches. Feed: CryptoCompare, refreshed every 5 minutes.</p>
+    <div id="newsList"><p class="empty-note">Loading headlines…</p></div>
   </section>
 
   <!-- table view (accessibility twin of the charts) -->
@@ -367,6 +444,10 @@ const state = {
   riskPct: 0.01,
   data: new Map(),            // key `${asset}:${tf}` -> { candles, source, fetchedAt }
   refreshTimer: null,
+  pulse: null, pulseAt: 0,    // funding / OI / Fear & Greed cache
+  news: null,                 // headlines cache
+  lastPlan: null,             // the plan currently on screen (for paper-trade placement)
+  lastResults: null,          // last overview results (for settling/re-rendering positions)
 };
 
 /* ============================================================
@@ -393,7 +474,8 @@ function fmtUsd(v) { return "$" + fmtPrice(v); }
 /* money amounts (risk, notional, P&L) — always 2 decimals so $10 never reads as $10.000 */
 function fmtMoney(v) {
   if (!isFinite(v)) return "—";
-  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const s = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (v < 0 ? "-$" : "$") + s;
 }
 function fmtNum(v, dp = 2) { return isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }) : "—"; }
 function fmtCompact(v) {
@@ -621,19 +703,27 @@ function obv(candles) {
 /* ============================================================
    Signal engine — twelve weighted components, score −100…+100
    ============================================================ */
-function analyze(candles) {
+function computeIndicators(candles) {
   const closes = candles.map(c => c.c);
-  const i = candles.length - 1;
-  const price = closes[i];
+  return {
+    closes,
+    e20: ema(closes, 20), e50: ema(closes, 50), e200: ema(closes, 200),
+    r: rsi(closes, 14),
+    m: macd(closes),
+    bb: bollinger(closes, 20, 2),
+    a: atr(candles, 14),
+    st: stochastic(candles, 14, 3),
+    ob: obv(candles),
+    volSma: sma(candles.map(c => c.v), 20),
+  };
+}
 
-  const e20 = ema(closes, 20), e50 = ema(closes, 50), e200 = ema(closes, 200);
-  const r = rsi(closes, 14);
-  const m = macd(closes);
-  const bb = bollinger(closes, 20, 2);
-  const a = atr(candles, 14);
-  const st = stochastic(candles, 14, 3);
-  const ob = obv(candles);
-  const volSma = sma(candles.map(c => c.v), 20);
+/* Score the engine at bar i using only data up to i — causal, so the
+   backtester can replay it bar-by-bar with zero lookahead. */
+function analyzeAt(candles, i, ind) {
+  ind = ind || computeIndicators(candles);
+  const { closes, e20, e50, e200, r, m, bb, a, st, ob, volSma } = ind;
+  const price = closes[i];
 
   const atrNow = a[i] ?? price * 0.01;
   const atrPct = (atrNow / price) * 100;
@@ -760,6 +850,80 @@ function analyze(candles) {
   return { price, score, label, conviction, bulls, bears, comps,
            e20, e50, e200, rsi: r, macd: m, bb, atrArr: a, atrNow, atrPct, stoch: st };
 }
+function analyze(candles) { return analyzeAt(candles, candles.length - 1); }
+
+/* Nearest swing support/resistance (3-bar fractal pivots over the shown window). */
+function swingLevels(candles, lookback = SHOWN, k = 3) {
+  const start = Math.max(k, candles.length - lookback);
+  const highs = [], lows = [];
+  for (let i = start; i < candles.length - k; i++) {
+    let isH = true, isL = true;
+    for (let j = 1; j <= k; j++) {
+      if (candles[i].h < candles[i - j].h || candles[i].h < candles[i + j].h) isH = false;
+      if (candles[i].l > candles[i - j].l || candles[i].l > candles[i + j].l) isL = false;
+    }
+    if (isH) highs.push(candles[i].h);
+    if (isL) lows.push(candles[i].l);
+  }
+  const price = last(candles).c;
+  return {
+    res: highs.filter(h => h > price).sort((x, y) => x - y)[0] ?? null,
+    sup: lows.filter(l => l < price).sort((x, y) => y - x)[0] ?? null,
+  };
+}
+
+/* ============================================================
+   Backtester — replays the engine bar-by-bar, entries on the
+   NEXT bar's open, stop counted before target when both hit.
+   ============================================================ */
+function backtest(candles) {
+  const ind = computeIndicators(candles);
+  const warm = 210;                       // EMA200 warm-up
+  const trades = [];
+  let pos = null;
+  for (let i = warm; i < candles.length - 1; i++) {
+    if (pos) {
+      const c = candles[i];
+      let exit = null, result = null;
+      const hitStop = pos.dir > 0 ? c.l <= pos.stop : c.h >= pos.stop;
+      const hitTgt = pos.dir > 0 ? c.h >= pos.target : c.l <= pos.target;
+      if (hitStop) { exit = pos.stop; result = "sl"; }        // conservative
+      else if (hitTgt) { exit = pos.target; result = "tp"; }
+      else if (i - pos.openIdx >= pos.maxBars) { exit = c.c; result = "time"; }
+      if (exit != null) {
+        trades.push({ r: pos.dir * (exit - pos.entry) / pos.riskDist, t: c.t, result });
+        pos = null;
+      }
+      continue;
+    }
+    const atrNow = ind.a[i];
+    if (atrNow == null) continue;
+    const s = analyzeAt(candles, i, ind);
+    if (Math.abs(s.score) < 18) continue;
+    const dir = s.score > 0 ? 1 : -1;
+    const strong = Math.abs(s.score) >= 45;
+    const entry = candles[i + 1].o;
+    const stopDist = 1.5 * atrNow, tgtDist = (strong ? 3.5 : 2.5) * atrNow;
+    pos = { dir, entry, stop: entry - dir * stopDist, target: entry + dir * tgtDist,
+            riskDist: stopDist, openIdx: i + 1,
+            maxBars: Math.ceil((tgtDist / (0.65 * atrNow)) * 1.7) };
+  }
+  const n = trades.length;
+  const wins = trades.filter(t => t.r > 0).length;
+  const gw = trades.filter(t => t.r > 0).reduce((s, t) => s + t.r, 0);
+  const gl = Math.abs(trades.filter(t => t.r <= 0).reduce((s, t) => s + t.r, 0));
+  let cum = 0, peak = 0, maxDD = 0;
+  const curve = trades.map(t => {
+    cum += t.r; peak = Math.max(peak, cum); maxDD = Math.max(maxDD, peak - cum);
+    return { t: t.t, v: cum };
+  });
+  const barsTested = Math.max(0, candles.length - warm);
+  const buyHoldPct = ((last(candles).c / candles[Math.min(warm, candles.length - 1)].c) - 1) * 100;
+  return { trades, curve, barsTested, buyHoldPct,
+           stats: { n, winRate: n ? (wins / n) * 100 : 0,
+                    profitFactor: gl > 0 ? gw / gl : (gw > 0 ? Infinity : 0),
+                    avgR: n ? (gw - gl) / n : 0, netR: gw - gl, maxDD } };
+}
 
 /* Trade plan: ATR-anchored levels + fixed-fractional position sizing. */
 function tradePlan(an, tf, capital, riskPct) {
@@ -788,6 +952,97 @@ function tradePlan(an, tf, capital, riskPct) {
 
   return { dir, strong, entry, stop, target, rr, stopDist, tgtDist,
            riskAmt, qty, notional, leverage, capped, profitAtTarget, holdLo, holdHi };
+}
+
+/* ============================================================
+   Market pulse — funding, open interest, Fear & Greed.
+   Kept OUT of the backtested score on purpose: no per-candle
+   history exists for these, and mixing them in would make the
+   backtest numbers dishonest.
+   ============================================================ */
+async function fetchPulse() {
+  const out = { fng: null, ctx: {} };
+  try {
+    const j = await fetchJson("https://api.alternative.me/fng/?limit=1");
+    const d = j && j.data && j.data[0];
+    if (d) out.fng = { value: +d.value, cls: String(d.value_classification || "") };
+  } catch (_) {}
+  try {
+    const j = await fetchJson("https://api.hyperliquid.xyz/info", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+    });
+    if (Array.isArray(j) && j.length === 2 && j[0] && Array.isArray(j[0].universe)) {
+      j[0].universe.forEach((u, idx) => {
+        const c = j[1][idx];
+        if (c) out.ctx[u.name] = { funding: parseFloat(c.funding), oi: parseFloat(c.openInterest), mark: parseFloat(c.markPx) };
+      });
+    }
+  } catch (_) {}
+  return out;
+}
+
+/* ---------- news (CryptoCompare public feed) ---------- */
+async function fetchNews() {
+  if (state.news && Date.now() - state.news.at < 5 * 60 * 1000) return state.news.items;
+  const j = await fetchJson("https://min-api.cryptocompare.com/data/v2/news/?lang=EN");
+  const items = ((j && j.Data) || []).slice(0, 12).map(n => ({
+    title: String(n.title || ""), url: String(n.url || ""),
+    source: String((n.source_info && n.source_info.name) || n.source || ""),
+    t: (+n.published_on || 0) * 1000, cats: String(n.categories || ""),
+  }));
+  state.news = { at: Date.now(), items };
+  return items;
+}
+function matchAssets(n) {
+  const hay = (n.title + " " + n.cats).toLowerCase();
+  const tags = [];
+  if (/\b(bitcoin|btc)\b/.test(hay)) tags.push("BTC");
+  if (/\b(ethereum|eth)\b/.test(hay)) tags.push("ETH");
+  if (/\b(solana|sol)\b/.test(hay)) tags.push("SOL");
+  if (/\b(hyperliquid|hype)\b/.test(hay)) tags.push("HYPE");
+  return tags;
+}
+function timeAgo(t) {
+  const m = Math.max(1, Math.round((Date.now() - t) / 60000));
+  if (m < 60) return m + "m ago";
+  if (m < 48 * 60) return Math.round(m / 60) + "h ago";
+  return Math.round(m / 1440) + "d ago";
+}
+
+/* ============================================================
+   Paper trading — simulated orders stored in the browser.
+   No exchange API keys ever touch this page (a static site
+   cannot protect secrets); real execution goes via the links.
+   ============================================================ */
+function loadPositions() {
+  try { const p = JSON.parse(localStorage.getItem("csd_positions") || "[]"); return Array.isArray(p) ? p : []; }
+  catch (_) { return []; }
+}
+function savePositions(p) { try { localStorage.setItem("csd_positions", JSON.stringify(p)); } catch (_) {} }
+function closePosition(pos, exit, result, at) {
+  pos.status = "closed"; pos.exit = exit; pos.result = result; pos.closedAt = at || Date.now();
+  pos.pnl = pos.dir * (exit - pos.entry) * pos.qty;
+  pos.r = pos.stopDist > 0 ? pos.dir * (exit - pos.entry) / pos.stopDist : 0;
+}
+/* Settle open positions against candle highs/lows since entry (stop counted first). */
+function settlePositions(results) {
+  const positions = loadPositions();
+  for (const pos of positions) {
+    if (pos.status !== "open") continue;
+    const res = results.find(r => r.asset.id === pos.asset);
+    if (!res) continue;
+    for (const b of res.entry.candles) {
+      if (b.t < pos.openedAt) continue;
+      const hitStop = pos.dir > 0 ? b.l <= pos.stop : b.h >= pos.stop;
+      const hitTgt = pos.dir > 0 ? b.h >= pos.target : b.l <= pos.target;
+      if (hitStop || hitTgt) {
+        closePosition(pos, hitStop ? pos.stop : pos.target, hitStop ? "sl" : "tp", b.t);
+        break;
+      }
+    }
+  }
+  savePositions(positions);
 }
 
 /* ============================================================
@@ -862,9 +1117,14 @@ function renderChart(container, tooltipNode, cfg) {
   // baseline
   svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: padT + plotH, y2: padT + plotH, stroke: axisColor, "stroke-width": 1 }));
 
-  // reference lines (RSI 30/70, MACD zero)
+  // reference lines (RSI 30/70, MACD zero, support/resistance)
   for (const rf of cfg.yRefs || []) {
     svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y(rf.v), y2: y(rf.v), stroke: axisColor, "stroke-width": 1 }));
+    if (rf.label) {
+      const lbl = svgEl("text", { x: padL + 4, y: y(rf.v) - 4, fill: muted, "font-size": 10, "font-weight": 600 });
+      lbl.textContent = rf.label;
+      svg.appendChild(lbl);
+    }
   }
   if (cfg.zeroLine) {
     svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y(0), y2: y(0), stroke: axisColor, "stroke-width": 1 }));
@@ -1096,19 +1356,22 @@ function renderHero(asset, an, mtf) {
   $("mtfNote").textContent = note;
 }
 
-function renderPlan(asset, an, plan) {
+function addTile(container, lbl, val, note, valColor) {
+  const t = el("div", "tile");
+  t.appendChild(el("div", "lbl", lbl));
+  const v = el("div", "val", val);
+  if (valColor) v.style.color = valColor;
+  t.appendChild(v);
+  if (note) t.appendChild(el("div", "note", note));
+  container.appendChild(t);
+}
+
+function renderPlan(asset, an, plan, levels) {
   $("planTitle").textContent = "Trade plan — " + asset.id + "/USD · " + TIMEFRAMES[state.tf].label + " (" + TIMEFRAMES[state.tf].style + ")";
   const tiles = $("planTiles");
   clear(tiles);
-  const tile = (lbl, val, note, valColor) => {
-    const t = el("div", "tile");
-    t.appendChild(el("div", "lbl", lbl));
-    const v = el("div", "val", val);
-    if (valColor) v.style.color = valColor;
-    t.appendChild(v);
-    if (note) t.appendChild(el("div", "note", note));
-    tiles.appendChild(t);
-  };
+  const tile = (lbl, val, note, valColor) => addTile(tiles, lbl, val, note, valColor);
+  renderPlanActions(asset, plan);
 
   if (plan.dir === 0) {
     $("planSub").textContent = "Score is inside the neutral band (−18…+18): the engine sees no exploitable edge on this timeframe right now.";
@@ -1137,13 +1400,293 @@ function renderPlan(asset, an, plan) {
   tile("Leverage implied", plan.leverage <= 1.01 ? "1× (spot works)" : plan.leverage.toFixed(1) + "×", plan.capped ? "capped at 5× — risk reduced" : "keep it under 5×");
   tile("Profit at target", "+" + fmtMoney(plan.profitAtTarget), "if stop honored: −" + fmtMoney(plan.riskAmt));
 
-  $("planCaveat").textContent =
+  let caveat =
     "Execution notes: enter on the current bar close or a small pullback; the stop is non-negotiable — the sizing math assumes it. " +
     "Move the stop to break-even after price travels 1×ATR in your favor. If the score flips sign before target, exit early. " +
     "Funding rates on perpetuals eat into holds longer than ~2 days — prefer spot for the 1D timeframe when long.";
+  if (levels) {
+    if (plan.dir > 0 && levels.res != null && levels.res < plan.target)
+      caveat += " Heads-up: swing resistance at " + fmtUsd(levels.res) + " sits before your target — consider taking partial profit there.";
+    if (plan.dir < 0 && levels.sup != null && levels.sup > plan.target)
+      caveat += " Heads-up: swing support at " + fmtUsd(levels.sup) + " sits before your target — consider taking partial profit there.";
+  }
+  $("planCaveat").textContent = caveat;
 }
 
-function renderCharts(asset, an, candles) {
+/* Place-trade button + real-exchange links under the plan. */
+function renderPlanActions(asset, plan) {
+  const box = $("planActions");
+  clear(box);
+  if (plan && plan.dir !== 0) {
+    const hasOpen = loadPositions().some(p => p.status === "open" && p.asset === asset.id);
+    const b = el("button", "btn " + (plan.dir > 0 ? "long" : "short"),
+      hasOpen ? "Paper position already open on " + asset.id
+              : "Place paper trade — " + (plan.dir > 0 ? "LONG " : "SHORT ") +
+                fmtNum(plan.qty, plan.entry >= 1000 ? 4 : 2) + " " + asset.id);
+    b.type = "button";
+    b.disabled = hasOpen;
+    b.addEventListener("click", onPlaceTrade);
+    box.appendChild(b);
+  }
+  const links = el("span", "link-row");
+  links.appendChild(el("span", "", "Execute for real:"));
+  const hl = el("a", "", "Hyperliquid ↗");
+  hl.href = "https://app.hyperliquid.xyz/trade/" + encodeURIComponent(asset.hl);
+  hl.target = "_blank"; hl.rel = "noopener noreferrer";
+  const bn = el("a", "", "Binance ↗");
+  bn.href = "https://www.binance.com/en/trade/" + encodeURIComponent(asset.id) + "_USDT";
+  bn.target = "_blank"; bn.rel = "noopener noreferrer";
+  links.appendChild(hl); links.appendChild(bn);
+  box.appendChild(links);
+}
+function onPlaceTrade() {
+  const lp = state.lastPlan;
+  if (!lp || lp.plan.dir === 0) return;
+  const positions = loadPositions();
+  if (positions.some(p => p.status === "open" && p.asset === lp.assetId)) return;
+  positions.push({
+    id: "p" + Date.now(), asset: lp.assetId, tf: lp.tf, dir: lp.plan.dir,
+    entry: lp.plan.entry, stop: lp.plan.stop, target: lp.plan.target,
+    qty: lp.plan.qty, riskAmt: lp.plan.riskAmt, stopDist: lp.plan.stopDist,
+    openedAt: Date.now(), status: "open",
+  });
+  savePositions(positions);
+  if (state.lastResults) renderPositions(state.lastResults);
+  renderPlanActions(ASSETS.find(a => a.id === lp.assetId), lp.plan);
+}
+
+/* ---------- market pulse ---------- */
+async function refreshPulse(asset) {
+  if (!state.pulse || Date.now() - state.pulseAt > 5 * 60 * 1000) {
+    state.pulse = await fetchPulse();
+    state.pulseAt = Date.now();
+  }
+  const pulse = state.pulse;
+  const tiles = $("pulseTiles");
+  clear(tiles);
+  const notes = [];
+  if (pulse.fng) {
+    addTile(tiles, "Fear & Greed index", String(pulse.fng.value), pulse.fng.cls);
+    if (pulse.fng.value >= 75) notes.push("Sentiment is in euphoria (" + pulse.fng.value + ") — greed zones often precede pullbacks, so be selective with fresh longs.");
+    else if (pulse.fng.value <= 25) notes.push("Sentiment is in extreme fear (" + pulse.fng.value + ") — historically where contrarian longs have the best odds.");
+    else notes.push("Sentiment is mid-range (" + pulse.fng.value + ", " + pulse.fng.cls + ") — no extreme to lean on.");
+  }
+  const ctx = pulse.ctx[asset.hl];
+  if (ctx && isFinite(ctx.funding)) {
+    const apr = ctx.funding * 24 * 365 * 100;
+    addTile(tiles, asset.id + " funding (annualized)", (apr >= 0 ? "+" : "") + apr.toFixed(1) + "%",
+      apr >= 0 ? "longs pay shorts" : "shorts pay longs");
+    if (isFinite(ctx.oi) && isFinite(ctx.mark))
+      addTile(tiles, asset.id + " open interest", "$" + fmtCompact(ctx.oi * ctx.mark), "Hyperliquid perps");
+    if (apr > 25) notes.push(asset.id + " longs are crowded and paying " + apr.toFixed(0) + "% APR to stay in — squeeze risk works against fresh longs and is a tailwind for shorts.");
+    else if (apr < -25) notes.push(asset.id + " shorts are crowded and paying " + Math.abs(apr).toFixed(0) + "% APR — short-squeeze fuel; a tailwind for longs.");
+    else notes.push(asset.id + " funding is near neutral — no positioning edge either way.");
+  }
+  if (!tiles.children.length) {
+    tiles.appendChild(el("p", "empty-note", "Positioning and sentiment feeds are unreachable right now — they retry on the next refresh."));
+    state.pulseAt = 0;
+  }
+  $("pulseNote").textContent = notes.join(" ");
+}
+
+/* ---------- news ---------- */
+async function refreshNews() {
+  const list = $("newsList");
+  try {
+    const items = await fetchNews();
+    clear(list);
+    if (!items.length) { list.appendChild(el("p", "empty-note", "No headlines right now.")); return; }
+    for (const n of items) {
+      const row = el("div", "news-item");
+      row.appendChild(el("span", "news-when", timeAgo(n.t)));
+      const body = el("div", "news-body");
+      if (/^https?:\/\//i.test(n.url)) {
+        const a = el("a", "news-title", n.title);
+        a.href = n.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        body.appendChild(a);
+      } else {
+        body.appendChild(el("span", "news-title", n.title));
+      }
+      const meta = el("div", "news-meta");
+      meta.appendChild(el("span", "", n.source));
+      for (const tag of matchAssets(n)) meta.appendChild(el("span", "news-tag", tag));
+      body.appendChild(meta);
+      row.appendChild(body);
+      list.appendChild(row);
+    }
+  } catch (_) {
+    clear(list);
+    list.appendChild(el("p", "empty-note", "News feed unreachable right now — it retries on the next refresh."));
+    state.news = null;
+  }
+}
+
+/* ---------- paper positions ---------- */
+function renderPositions(results) {
+  const positions = loadPositions();
+  const closed = positions.filter(p => p.status === "closed");
+  const open = positions.filter(p => p.status === "open");
+  const stats = $("paperStats");
+  clear(stats);
+  const wins = closed.filter(p => p.pnl > 0).length;
+  const netPnl = closed.reduce((s, p) => s + p.pnl, 0);
+  const avgR = closed.length ? closed.reduce((s, p) => s + p.r, 0) / closed.length : 0;
+  addTile(stats, "Open positions", String(open.length), open.length ? "settling on candle data" : "none");
+  addTile(stats, "Closed trades", String(closed.length), "your forward record");
+  addTile(stats, "Win rate", closed.length ? Math.round((wins / closed.length) * 100) + "%" : "—", closed.length ? wins + " of " + closed.length : "no closed trades yet");
+  addTile(stats, "Net P&L", fmtMoney(netPnl), "paper, after stops/targets",
+    closed.length ? (netPnl >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
+  addTile(stats, "Avg trade", closed.length ? (avgR >= 0 ? "+" : "") + avgR.toFixed(2) + " R" : "—", "expectancy per trade");
+
+  const tbody = $("positionsTable").querySelector("tbody");
+  clear(tbody);
+  const rows = [...open, ...closed].sort((a, b) => b.openedAt - a.openedAt).slice(0, 30);
+  if (!rows.length) {
+    const tr = el("tr");
+    const td = el("td", "", "No paper trades yet — when the engine fires a LONG or SHORT, place one from the trade plan above and this desk starts building its own track record.");
+    td.colSpan = 10;
+    td.className = "empty-note";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const p of rows) {
+    const res = results && results.find(r => r.asset.id === p.asset);
+    const cur = res ? res.an.price : p.entry;
+    const isOpen = p.status === "open";
+    const pnl = isOpen ? p.dir * (cur - p.entry) * p.qty : p.pnl;
+    const r = isOpen ? (p.stopDist > 0 ? p.dir * (cur - p.entry) / p.stopDist : 0) : p.r;
+    const tr = el("tr");
+    tr.appendChild(el("td", "", p.asset + " · " + p.tf));
+    const side = el("td");
+    const sc = el("span", "verdict-cell " + (p.dir > 0 ? "bull" : "bear"));
+    sc.appendChild(el("span", "dot"));
+    sc.appendChild(el("span", "", p.dir > 0 ? "LONG" : "SHORT"));
+    side.appendChild(sc);
+    tr.appendChild(side);
+    tr.appendChild(el("td", "num", fmtPrice(p.entry)));
+    tr.appendChild(el("td", "num", fmtPrice(p.stop)));
+    tr.appendChild(el("td", "num", fmtPrice(p.target)));
+    tr.appendChild(el("td", "num", fmtNum(p.qty, p.entry >= 1000 ? 4 : 2)));
+    const pnlTd = el("td", "num", (pnl >= 0 ? "+" : "") + fmtMoney(pnl));
+    pnlTd.style.color = pnl >= 0 ? getCss("--delta-up") : getCss("--delta-down");
+    pnlTd.style.fontWeight = "650";
+    tr.appendChild(pnlTd);
+    tr.appendChild(el("td", "num", (r >= 0 ? "+" : "") + r.toFixed(2)));
+    const stTd = el("td");
+    const chip = el("span", "pos-chip " + (isOpen ? "open" : (p.pnl > 0 ? "win" : "loss")),
+      isOpen ? "OPEN" : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : "CLOSED");
+    stTd.appendChild(chip);
+    tr.appendChild(stTd);
+    const actTd = el("td");
+    if (isOpen) {
+      const btn = el("button", "mini-btn", "Close");
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        const all = loadPositions();
+        const mine = all.find(q => q.id === p.id);
+        if (mine && mine.status === "open") {
+          closePosition(mine, cur, "manual");
+          savePositions(all);
+          renderPositions(state.lastResults);
+          if (state.lastPlan) renderPlanActions(ASSETS.find(a => a.id === state.lastPlan.assetId), state.lastPlan.plan);
+        }
+      });
+      actTd.appendChild(btn);
+    }
+    tr.appendChild(actTd);
+    tbody.appendChild(tr);
+  }
+}
+
+/* ---------- backtest UI ---------- */
+const fmtR = (v) => (v >= 0 ? "+" : "") + v.toFixed(2) + " R";
+async function runBacktests() {
+  const btn = $("runBacktest");
+  btn.disabled = true;
+  btn.textContent = "Running…";
+  try {
+    const asset = ASSETS.find(a => a.id === state.asset);
+    const rows = [];
+    for (const tf of Object.keys(TIMEFRAMES)) {
+      const entry = await getCandles(state.asset, tf, 5 * 60 * 1000);
+      rows.push({ tf, source: entry.source, bt: backtest(entry.candles) });
+    }
+    renderBacktest(asset, rows);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Run backtest";
+  }
+}
+function renderBacktest(asset, rows) {
+  const box = $("btResults");
+  clear(box);
+  const selRow = rows.find(r => r.tf === state.tf) || rows[0];
+  const anySim = rows.some(r => r.source === "Simulated");
+  box.appendChild(el("p", "sub",
+    asset.name + " — engine replayed on " + selRow.bt.barsTested + " × " + TIMEFRAMES[selRow.tf].label +
+    " bars" + (anySim ? " (SIMULATED data — a demo of the method, not real accuracy)" : "") + "."));
+
+  const st = selRow.bt.stats;
+  const tiles = el("div", "tiles");
+  addTile(tiles, "Trades", String(st.n), TIMEFRAMES[selRow.tf].label + " timeframe");
+  addTile(tiles, "Win rate", st.n ? st.winRate.toFixed(0) + "%" : "—", "stop / target / time exits");
+  addTile(tiles, "Profit factor", st.n ? (isFinite(st.profitFactor) ? st.profitFactor.toFixed(2) : "∞") : "—", "gross win ÷ gross loss");
+  addTile(tiles, "Avg trade", st.n ? fmtR(st.avgR) : "—", "expectancy per trade");
+  addTile(tiles, "Net result", st.n ? fmtR(st.netR) : "—",
+    "≈ " + (st.netR >= 0 ? "+" : "") + st.netR.toFixed(1) + "% on account at 1% risk",
+    st.n ? (st.netR >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
+  addTile(tiles, "Max drawdown", st.n ? st.maxDD.toFixed(2) + " R" : "—", "peak-to-trough");
+  addTile(tiles, "Buy & hold", (selRow.bt.buyHoldPct >= 0 ? "+" : "") + selRow.bt.buyHoldPct.toFixed(1) + "%", "same window, for comparison");
+  box.appendChild(tiles);
+
+  const wrap = el("div", "table-wrap");
+  wrap.style.marginTop = "14px";
+  const table = el("table");
+  const thead = el("thead");
+  const hr = el("tr");
+  for (const [h, num] of [["Timeframe", 0], ["Trades", 1], ["Win rate", 1], ["Profit factor", 1], ["Avg trade", 1], ["Net R", 1], ["Bars tested", 1], ["Data", 0]])
+    hr.appendChild(el("th", num ? "num" : "", h));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tbody = el("tbody");
+  for (const row of rows) {
+    const s = row.bt.stats;
+    const tr = el("tr");
+    tr.appendChild(el("td", "", TIMEFRAMES[row.tf].label + (row.tf === state.tf ? " (selected)" : "")));
+    tr.appendChild(el("td", "num", String(s.n)));
+    tr.appendChild(el("td", "num", s.n ? s.winRate.toFixed(0) + "%" : "—"));
+    tr.appendChild(el("td", "num", s.n ? (isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞") : "—"));
+    tr.appendChild(el("td", "num", s.n ? fmtR(s.avgR) : "—"));
+    const netTd = el("td", "num", s.n ? fmtR(s.netR) : "—");
+    if (s.n) { netTd.style.color = s.netR >= 0 ? getCss("--delta-up") : getCss("--delta-down"); netTd.style.fontWeight = "650"; }
+    tr.appendChild(netTd);
+    tr.appendChild(el("td", "num", String(row.bt.barsTested)));
+    tr.appendChild(el("td", "", row.source));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  box.appendChild(wrap);
+
+  if (selRow.bt.curve.length >= 2) {
+    box.appendChild(el("p", "sub", "Equity curve — cumulative R per trade, " + TIMEFRAMES[selRow.tf].label + " timeframe."));
+    const chartDiv = el("div");
+    box.appendChild(chartDiv);
+    renderChart(chartDiv, $("btTip"), {
+      times: selRow.bt.curve.map(p => p.t), tf: selRow.tf, height: 200, zeroLine: true, endLabel: true,
+      yFmt: (v) => v.toFixed(1) + "R",
+      series: [{ name: "Cumulative R", color: getCss("--series-1"), values: selRow.bt.curve.map(p => p.v) }],
+    });
+  } else {
+    box.appendChild(el("p", "empty-note", "Not enough trades on this timeframe to draw an equity curve."));
+  }
+  box.appendChild(el("p", "plan-caveat",
+    "Honest read: a backtest over a few hundred bars is a smoke test, not proof — market regimes change, and results exclude fees, funding and slippage. " +
+    "Trust the engine only as far as its forward paper-trading record above keeps confirming it."));
+}
+
+function renderCharts(asset, an, candles, levels) {
   const s = candles.length - SHOWN;
   const win = (arr) => arr.slice(s);
   const times = win(candles.map(c => c.t));
@@ -1169,8 +1712,12 @@ function renderCharts(asset, an, candles) {
   legItem("EMA 200", getCss("--series-4"));
   legItem("Bollinger 20,2", getCss("--series-1"), true);
 
+  const priceRefs = [];
+  if (levels && levels.res != null) priceRefs.push({ v: levels.res, label: "Resistance " + fmtPrice(levels.res) });
+  if (levels && levels.sup != null) priceRefs.push({ v: levels.sup, label: "Support " + fmtPrice(levels.sup) });
+
   renderChart($("priceChart"), $("priceTip"), {
-    times, tf: state.tf, height: 300, endLabel: true,
+    times, tf: state.tf, height: 300, endLabel: true, yRefs: priceRefs,
     band: { upper: win(an.bb.upper), lower: win(an.bb.lower), color: getCss("--series-1") },
     series: [
       { name: "Close",  color: getCss("--series-1"), values: closes },
@@ -1299,13 +1846,21 @@ async function refresh(hard) {
     const sel = results.find(r => r.asset.id === state.asset);
     const { asset, entry, an } = sel;
     const plan = tradePlan(an, state.tf, state.capital, state.riskPct);
+    const levels = swingLevels(entry.candles);
+    state.lastPlan = { assetId: asset.id, tf: state.tf, plan, an };
+    state.lastResults = results;
 
+    settlePositions(results);
     renderOverview(results);
     renderHero(asset, an, mtf);
-    renderPlan(asset, an, plan);
-    renderCharts(asset, an, entry.candles);
+    renderPlan(asset, an, plan, levels);
+    renderPositions(results);
+    renderCharts(asset, an, entry.candles, levels);
     renderBreakdown(an);
     renderDataTable(asset, an, entry.candles);
+    // context feeds render independently — a dead news API never blocks the signals
+    refreshPulse(asset).catch(() => {});
+    refreshNews().catch(() => {});
 
     const sources = new Set(results.map(r => r.entry.source));
     const badge = $("srcBadge");
@@ -1346,6 +1901,11 @@ function wireControls() {
     $("dataTableCard").classList.toggle("hidden", !$("tableToggle").checked);
   });
   $("refreshBtn").addEventListener("click", () => refresh(true));
+  $("runBacktest").addEventListener("click", () => { runBacktests().catch(() => {}); });
+  $("clearHistory").addEventListener("click", () => {
+    savePositions(loadPositions().filter(p => p.status === "open"));
+    renderPositions(state.lastResults);
+  });
 
   let resizeT = null;
   window.addEventListener("resize", () => {

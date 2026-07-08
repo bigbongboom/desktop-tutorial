@@ -17,6 +17,20 @@ One file, zero dependencies — open `index.html` in any browser.
 - **ATR-anchored trade plan**: entry, stop (1.5×ATR), target (2.5–3.5×ATR), reward:risk,
   an expected hold window, and fixed-fractional position sizing from your capital and
   risk budget (0.5–2% per trade, exposure capped at 5×).
+- **Market pulse** — the data professional desks watch: perpetual funding rates and open
+  interest (crowd positioning, via Hyperliquid) and the Fear & Greed index, kept out of
+  the backtested score on purpose so the accuracy numbers stay honest.
+- **Backtester** — replays the exact engine bar-by-bar with zero lookahead (entries on
+  the next bar's open, stop counted before target): win rate, profit factor, expectancy,
+  max drawdown, equity curve, and a per-timeframe comparison vs buy & hold.
+- **Paper trading** — place the engine's trades in-app (stored in your browser), with
+  stops/targets settled against candle highs/lows, live P&L, and a forward win-rate
+  ledger. No exchange keys ever touch the page; one-click links execute for real on
+  Hyperliquid or Binance.
+- **Crypto news feed** — latest headlines (CryptoCompare) tagged by asset, because a
+  story can invalidate any technical setup.
+- **Key levels** — swing support/resistance drawn on the price chart and folded into
+  the trade plan's profit-taking notes.
 - **Full transparency**: every signal's reading and point contribution is listed in the
   breakdown table, and every chart has an accessible data-table twin.
 - Interactive SVG charts (price + EMAs + Bollinger wash, RSI, MACD) with crosshair

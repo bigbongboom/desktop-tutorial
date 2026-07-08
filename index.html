@@ -208,6 +208,42 @@
   .table-wrap { overflow-x: auto; }
   .hidden { display: none; }
 
+  /* ---------- view navigation ---------- */
+  .view-nav { display: flex; gap: 8px; margin: 0 0 16px; }
+  .view-nav button {
+    font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+    padding: 8px 18px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-secondary);
+  }
+  .view-nav button:hover { color: var(--text-primary); }
+  .view-nav button.active { background: var(--accent-soft); color: var(--text-primary); border-color: var(--series-1); }
+  .nav-badge {
+    display: inline-block; min-width: 12px; padding: 1px 7px; margin-left: 6px;
+    border-radius: 999px; background: var(--status-good); color: #fff; font-size: 11px;
+  }
+  .nav-badge:empty { display: none; }
+
+  /* ---------- trade ticket ---------- */
+  .ticket { margin-top: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 13px 14px; width: 100%; }
+  .ticket h3 { font-size: 12px; font-weight: 700; margin-bottom: 10px; color: var(--text-secondary); }
+  .ticket .fields { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .ticket label { font-size: 11px; color: var(--text-muted); font-weight: 600; display: flex; flex-direction: column; gap: 4px; }
+  .ticket input, .ticket select {
+    font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); width: 128px;
+  }
+  .ticket .reset-link { font-size: 12px; font-weight: 600; color: var(--series-1); background: none; border: none; cursor: pointer; padding: 8px 0; }
+  .ticket-summary { font-size: 12.5px; color: var(--text-secondary); margin-top: 10px; line-height: 1.6; }
+  .ticket-summary strong { color: var(--text-primary); }
+  .ticket-error { font-size: 12px; font-weight: 600; color: var(--status-critical); margin-top: 6px; }
+  .ticket-warn { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-top: 6px; }
+  .placed-note { font-size: 12px; font-weight: 700; color: var(--status-good); }
+  .placed-note a { color: var(--series-1); }
+  td input.cell-edit {
+    font: inherit; font-size: 12px; width: 92px; padding: 4px 6px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+
   /* ---------- actions, buttons, links ---------- */
   .plan-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
   button.btn {
@@ -266,6 +302,13 @@
     It measures probabilities, not certainties: <strong>no model predicts markets. Never risk money you can't afford to lose.</strong>
   </p>
 
+  <nav class="view-nav" aria-label="Views">
+    <button type="button" data-view="desk" class="active">Signal desk</button>
+    <button type="button" data-view="portfolio">Portfolio<span class="nav-badge" id="pfBadge"></span></button>
+  </nav>
+
+  <div id="deskView">
+
   <!-- one filter row, above everything it scopes -->
   <section class="filters" aria-label="Filters">
     <div class="tf-group" id="tfGroup" role="group" aria-label="Timeframe">
@@ -284,6 +327,7 @@
         <option value="0.02">2%</option>
       </select>
     </label>
+    <label title="Browser notifications when a LONG or SHORT signal fires. The tab must stay open — a static page cannot push to a closed browser."><input id="alertToggle" type="checkbox"> Signal alerts</label>
     <label class="toggle-table"><input id="tableToggle" type="checkbox"> Table view</label>
   </section>
 
@@ -326,21 +370,6 @@
     <div class="tiles" id="planTiles"></div>
     <p class="plan-caveat" id="planCaveat"></p>
     <div class="plan-actions" id="planActions"></div>
-  </section>
-
-  <!-- paper trading -->
-  <section class="card">
-    <h2>Paper trading — track the desk's real accuracy</h2>
-    <p class="sub">Trades placed here are simulated and saved in this browser. No exchange API keys ever touch this page — a public static site cannot protect secrets, so real execution stays on the exchange via the links in the trade plan. Stops and targets settle against candle highs/lows on each refresh, so fills are close to (not exactly) live.</p>
-    <div class="tiles" id="paperStats"></div>
-    <div class="table-wrap"><table id="positionsTable">
-      <thead><tr>
-        <th>Asset</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th>
-        <th class="num">Size</th><th class="num">P&amp;L</th><th class="num">R</th><th>Status</th><th></th>
-      </tr></thead>
-      <tbody></tbody>
-    </table></div>
-    <div class="plan-actions"><button class="btn" id="clearHistory" type="button">Clear closed trades</button></div>
   </section>
 
   <!-- charts -->
@@ -406,6 +435,31 @@
     </table></div>
   </section>
 
+  </div><!-- /deskView -->
+
+  <!-- portfolio portal -->
+  <div id="portfolioView" class="hidden">
+    <section class="card">
+      <h2>Portfolio — your paper trading account</h2>
+      <p class="sub" id="pfUpdated">Prices auto-refresh every 60 seconds.</p>
+      <div class="tiles" id="pfSummary"></div>
+    </section>
+
+    <section class="card">
+      <h2>Your trades</h2>
+      <p class="sub">Trades are simulated and saved in this browser. No exchange API keys ever touch this page — a public static site cannot protect secrets, so real execution stays on the exchange via the links in the trade plan. Stops and targets settle against candle highs/lows on each refresh. Use Edit to move an open trade's stop or target.</p>
+      <div class="tiles" id="paperStats"></div>
+      <div class="table-wrap"><table id="positionsTable">
+        <thead><tr>
+          <th>Asset</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th>
+          <th class="num">Size</th><th class="num">Price / Exit</th><th class="num">P&amp;L</th><th class="num">R</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <div class="plan-actions"><button class="btn" id="clearHistory" type="button">Clear closed trades</button></div>
+    </section>
+  </div><!-- /portfolioView -->
+
   <footer>
     <strong>Disclaimer.</strong> This dashboard is an educational technical-analysis tool, not financial advice.
     Signals are derived from historical price and volume; they describe probabilistic tendencies and can be —
@@ -448,6 +502,11 @@ const state = {
   news: null,                 // headlines cache
   lastPlan: null,             // the plan currently on screen (for paper-trade placement)
   lastResults: null,          // last overview results (for settling/re-rendering positions)
+  view: "desk",               // "desk" | "portfolio"
+  ticket: null,               // user-editable trade ticket (size / leverage / stop / target)
+  justPlaced: null,           // asset id of a trade placed this session (for the confirmation note)
+  editingId: null,            // position id currently being edited in the portfolio table
+  lastLabels: {},             // last signal label per asset:tf (alert transition detection)
 };
 
 /* ============================================================
@@ -1117,11 +1176,11 @@ function renderChart(container, tooltipNode, cfg) {
   // baseline
   svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: padT + plotH, y2: padT + plotH, stroke: axisColor, "stroke-width": 1 }));
 
-  // reference lines (RSI 30/70, MACD zero, support/resistance)
+  // reference lines (RSI 30/70, MACD zero, support/resistance, trade levels)
   for (const rf of cfg.yRefs || []) {
-    svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y(rf.v), y2: y(rf.v), stroke: axisColor, "stroke-width": 1 }));
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: y(rf.v), y2: y(rf.v), stroke: rf.color || axisColor, "stroke-width": 1 }));
     if (rf.label) {
-      const lbl = svgEl("text", { x: padL + 4, y: y(rf.v) - 4, fill: muted, "font-size": 10, "font-weight": 600 });
+      const lbl = svgEl("text", { x: padL + 4, y: y(rf.v) - 4, fill: rf.color || muted, "font-size": 10, "font-weight": 600 });
       lbl.textContent = rf.label;
       svg.appendChild(lbl);
     }
@@ -1413,21 +1472,129 @@ function renderPlan(asset, an, plan, levels) {
   $("planCaveat").textContent = caveat;
 }
 
-/* Place-trade button + real-exchange links under the plan. */
+/* ---------- editable trade ticket + place button + exchange links ---------- */
+function ensureTicket(asset, plan) {
+  const key = asset.id + ":" + state.tf;
+  const t = state.ticket;
+  if (t && t.key === key && t.dir === plan.dir && t.dirty) return t;   // keep user edits
+  state.ticket = {
+    key, dir: plan.dir,
+    qty: +plan.qty.toPrecision(5),
+    lev: plan.leverage <= 1.01 ? 1 : Math.min(5, Math.ceil(plan.leverage)),
+    stop: +plan.stop.toPrecision(6),
+    target: +plan.target.toPrecision(6),
+    dirty: false,
+  };
+  return state.ticket;
+}
+function validateTicket(plan, t) {
+  const entry = plan.entry;
+  const errs = [], warns = [];
+  if (!(t.qty > 0) || !isFinite(t.qty)) errs.push("Size must be a positive number.");
+  if (!isFinite(t.stop) || !isFinite(t.target)) errs.push("Stop and target must be numbers.");
+  else if (t.dir > 0) {
+    if (!(t.stop < entry)) errs.push("For a LONG the stop must sit below the entry (" + fmtUsd(entry) + ").");
+    if (!(t.target > entry)) errs.push("For a LONG the target must sit above the entry.");
+  } else {
+    if (!(t.stop > entry)) errs.push("For a SHORT the stop must sit above the entry (" + fmtUsd(entry) + ").");
+    if (!(t.target < entry)) errs.push("For a SHORT the target must sit below the entry.");
+  }
+  const notional = t.qty * entry;
+  const maxNotional = state.capital * t.lev;
+  if (notional > maxNotional + 1e-9)
+    errs.push("This size needs " + (notional / state.capital).toFixed(1) + "× your capital — raise the leverage or cut the size (max at " +
+      t.lev + "×: " + fmtNum(maxNotional / entry, entry >= 1000 ? 4 : 2) + ").");
+  const stopDist = Math.abs(entry - t.stop);
+  const riskAmt = t.qty * stopDist;
+  const riskPct = state.capital > 0 ? (riskAmt / state.capital) * 100 : 0;
+  if (!errs.length && riskPct > 3) warns.push("⚠ A stop-out costs " + riskPct.toFixed(1) + "% of your capital — professionals stay at 1–2% per trade.");
+  if (t.lev > 5) warns.push("⚠ Above 5× leverage, normal crypto volatility reaches liquidation territory fast.");
+  return { ok: errs.length === 0, errs, warns, notional, stopDist, riskAmt, riskPct,
+           margin: t.lev > 0 ? notional / t.lev : notional,
+           profit: t.qty * Math.abs(t.target - entry),
+           rr: stopDist > 0 ? Math.abs(t.target - entry) / stopDist : 0 };
+}
 function renderPlanActions(asset, plan) {
   const box = $("planActions");
   clear(box);
-  if (plan && plan.dir !== 0) {
-    const hasOpen = loadPositions().some(p => p.status === "open" && p.asset === asset.id);
-    const b = el("button", "btn " + (plan.dir > 0 ? "long" : "short"),
-      hasOpen ? "Paper position already open on " + asset.id
-              : "Place paper trade — " + (plan.dir > 0 ? "LONG " : "SHORT ") +
-                fmtNum(plan.qty, plan.entry >= 1000 ? 4 : 2) + " " + asset.id);
+  const hasOpen = loadPositions().some(p => p.status === "open" && p.asset === asset.id);
+
+  if (plan && plan.dir !== 0 && !hasOpen) {
+    const t = ensureTicket(asset, plan);
+    const ticket = el("div", "ticket");
+    ticket.appendChild(el("h3", "", "Customize the trade before placing — engine defaults are pre-filled"));
+    const fields = el("div", "fields");
+    const mkField = (lblText, value, step, onchange) => {
+      const lbl = el("label", "", lblText);
+      const inp = el("input");
+      inp.type = "number"; inp.step = step; inp.value = String(value);
+      inp.addEventListener("input", () => { onchange(parseFloat(inp.value)); t.dirty = true; update(); });
+      lbl.appendChild(inp);
+      fields.appendChild(lbl);
+      return inp;
+    };
+    mkField("Size (" + asset.id + ")", t.qty, "any", v => { t.qty = v; });
+    const levLbl = el("label", "", "Leverage");
+    const levSel = el("select");
+    for (const lv of [1, 2, 3, 5, 10]) {
+      const o = el("option", "", lv + "×");
+      o.value = String(lv);
+      if (lv === t.lev) o.selected = true;
+      levSel.appendChild(o);
+    }
+    if (![1, 2, 3, 5, 10].includes(t.lev)) levSel.value = "5";
+    levSel.addEventListener("change", () => { t.lev = parseInt(levSel.value, 10); t.dirty = true; update(); });
+    levLbl.appendChild(levSel);
+    fields.appendChild(levLbl);
+    mkField("Stop loss (USD)", t.stop, "any", v => { t.stop = v; });
+    mkField("Take profit (USD)", t.target, "any", v => { t.target = v; });
+    const reset = el("button", "reset-link", "Reset to engine plan");
+    reset.type = "button";
+    reset.addEventListener("click", () => { state.ticket = null; renderPlanActions(asset, plan); });
+    fields.appendChild(reset);
+    ticket.appendChild(fields);
+    const summary = el("div", "ticket-summary");
+    const errBox = el("div", "ticket-error");
+    const warnBox = el("div", "ticket-warn");
+    ticket.appendChild(summary); ticket.appendChild(errBox); ticket.appendChild(warnBox);
+
+    const b = el("button", "btn " + (plan.dir > 0 ? "long" : "short"));
     b.type = "button";
-    b.disabled = hasOpen;
     b.addEventListener("click", onPlaceTrade);
+
+    const update = () => {
+      const v = validateTicket(plan, t);
+      summary.textContent = "";
+      const strong = (txt) => { const s = el("strong", "", txt); summary.appendChild(s); };
+      const plain = (txt) => summary.appendChild(document.createTextNode(txt));
+      plain("Entry " + fmtUsd(plan.entry) + " (market) · notional ");
+      strong(fmtMoney(v.notional));
+      plain(" · margin " + fmtMoney(v.margin) + " at " + t.lev + "× · risk ");
+      strong(fmtMoney(v.riskAmt) + " (" + v.riskPct.toFixed(1) + "% of capital)");
+      plain(" · at target +" + fmtMoney(v.profit) + " · reward:risk " + v.rr.toFixed(2) + ":1");
+      errBox.textContent = v.errs.join(" ");
+      warnBox.textContent = v.warns.join(" ");
+      b.disabled = !v.ok;
+      b.textContent = "Place paper trade — " + (plan.dir > 0 ? "LONG " : "SHORT ") +
+        (isFinite(t.qty) ? fmtNum(t.qty, plan.entry >= 1000 ? 4 : 2) : "?") + " " + asset.id + " at " + t.lev + "×";
+    };
+    update();
+    box.appendChild(ticket);
     box.appendChild(b);
+  } else if (plan && plan.dir !== 0 && hasOpen) {
+    const b = el("button", "btn", "Paper position already open on " + asset.id);
+    b.type = "button"; b.disabled = true;
+    box.appendChild(b);
+    if (state.justPlaced === asset.id) {
+      const note = el("span", "placed-note", "Trade placed — track it in the ");
+      const a = el("a", "", "Portfolio tab →");
+      a.href = "#";
+      a.addEventListener("click", (e) => { e.preventDefault(); switchView("portfolio"); });
+      note.appendChild(a);
+      box.appendChild(note);
+    }
   }
+
   const links = el("span", "link-row");
   links.appendChild(el("span", "", "Execute for real:"));
   const hl = el("a", "", "Hyperliquid ↗");
@@ -1441,18 +1608,61 @@ function renderPlanActions(asset, plan) {
 }
 function onPlaceTrade() {
   const lp = state.lastPlan;
-  if (!lp || lp.plan.dir === 0) return;
+  const t = state.ticket;
+  if (!lp || lp.plan.dir === 0 || !t) return;
+  const v = validateTicket(lp.plan, t);
+  if (!v.ok) return;
   const positions = loadPositions();
   if (positions.some(p => p.status === "open" && p.asset === lp.assetId)) return;
   positions.push({
-    id: "p" + Date.now(), asset: lp.assetId, tf: lp.tf, dir: lp.plan.dir,
-    entry: lp.plan.entry, stop: lp.plan.stop, target: lp.plan.target,
-    qty: lp.plan.qty, riskAmt: lp.plan.riskAmt, stopDist: lp.plan.stopDist,
+    id: "p" + Date.now(), asset: lp.assetId, tf: lp.tf, dir: t.dir,
+    entry: lp.plan.entry, stop: t.stop, target: t.target,
+    qty: t.qty, lev: t.lev, riskAmt: v.riskAmt, stopDist: v.stopDist,
     openedAt: Date.now(), status: "open",
   });
   savePositions(positions);
+  state.ticket = null;
+  state.justPlaced = lp.assetId;
   if (state.lastResults) renderPositions(state.lastResults);
   renderPlanActions(ASSETS.find(a => a.id === lp.assetId), lp.plan);
+}
+/* ---------- signal alerts (browser notifications, tab must stay open) ---------- */
+function alertsEnabled() {
+  return $("alertToggle").checked && typeof Notification !== "undefined" && Notification.permission === "granted";
+}
+function notifySignals(results) {
+  const prev = state.lastLabels || {};
+  const next = { ...prev };
+  for (const { asset, an } of results) {
+    const key = asset.id + ":" + state.tf;
+    const had = key in prev;
+    const was = prev[key] || "NEUTRAL";
+    next[key] = an.label;
+    if (!had || !alertsEnabled()) continue;      // first sight of a pair is the baseline, never an alert
+    const dir = an.label.includes("LONG") ? 1 : an.label.includes("SHORT") ? -1 : 0;
+    const wasDir = was.includes("LONG") ? 1 : was.includes("SHORT") ? -1 : 0;
+    const upgraded = an.label.startsWith("STRONG") && !was.startsWith("STRONG");
+    if (dir !== 0 && (dir !== wasDir || upgraded)) {
+      const plan = tradePlan(an, state.tf, state.capital, state.riskPct);
+      try {
+        new Notification(asset.id + ": " + an.label + " · " + TIMEFRAMES[state.tf].label + " chart", {
+          tag: "csd-" + key,
+          body: "Enter " + (dir > 0 ? "LONG" : "SHORT") + " ~" + fmtUsd(plan.entry) +
+                " · stop " + fmtUsd(plan.stop) + " · target " + fmtUsd(plan.target) +
+                " · score " + (an.score > 0 ? "+" : "") + an.score,
+        });
+      } catch (_) {}
+    }
+  }
+  state.lastLabels = next;
+}
+
+function switchView(view) {
+  state.view = view;
+  $("deskView").classList.toggle("hidden", view !== "desk");
+  $("portfolioView").classList.toggle("hidden", view !== "portfolio");
+  for (const b of document.querySelectorAll(".view-nav button"))
+    b.classList.toggle("active", b.dataset.view === view);
 }
 
 /* ---------- market pulse ---------- */
@@ -1521,21 +1731,40 @@ async function refreshNews() {
   }
 }
 
-/* ---------- paper positions ---------- */
+/* ---------- portfolio (paper positions) ---------- */
 function renderPositions(results) {
   const positions = loadPositions();
   const closed = positions.filter(p => p.status === "closed");
   const open = positions.filter(p => p.status === "open");
+  const curPrice = (p) => {
+    const res = results && results.find(r => r.asset.id === p.asset);
+    return res ? res.an.price : p.entry;
+  };
+
+  $("pfBadge").textContent = open.length ? String(open.length) : "";
+  $("pfUpdated").textContent = "Prices auto-refresh every 60 seconds · last update " + new Date().toLocaleTimeString() + ".";
+
+  // account summary
+  const realized = closed.reduce((s, p) => s + p.pnl, 0);
+  const unrealized = open.reduce((s, p) => s + p.dir * (curPrice(p) - p.entry) * p.qty, 0);
+  const equity = state.capital + realized + unrealized;
+  const sum = $("pfSummary");
+  clear(sum);
+  addTile(sum, "Paper equity", fmtMoney(equity), "capital " + fmtMoney(state.capital) + " + results",
+    equity >= state.capital ? getCss("--status-good") : getCss("--status-critical"));
+  addTile(sum, "Unrealized P&L", (unrealized >= 0 ? "+" : "") + fmtMoney(unrealized), open.length + " open position" + (open.length === 1 ? "" : "s"),
+    open.length ? (unrealized >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
+  addTile(sum, "Realized P&L", (realized >= 0 ? "+" : "") + fmtMoney(realized), closed.length + " closed trade" + (closed.length === 1 ? "" : "s"),
+    closed.length ? (realized >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
+
+  // record stats
   const stats = $("paperStats");
   clear(stats);
   const wins = closed.filter(p => p.pnl > 0).length;
-  const netPnl = closed.reduce((s, p) => s + p.pnl, 0);
   const avgR = closed.length ? closed.reduce((s, p) => s + p.r, 0) / closed.length : 0;
   addTile(stats, "Open positions", String(open.length), open.length ? "settling on candle data" : "none");
   addTile(stats, "Closed trades", String(closed.length), "your forward record");
   addTile(stats, "Win rate", closed.length ? Math.round((wins / closed.length) * 100) + "%" : "—", closed.length ? wins + " of " + closed.length : "no closed trades yet");
-  addTile(stats, "Net P&L", fmtMoney(netPnl), "paper, after stops/targets",
-    closed.length ? (netPnl >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
   addTile(stats, "Avg trade", closed.length ? (avgR >= 0 ? "+" : "") + avgR.toFixed(2) + " R" : "—", "expectancy per trade");
 
   const tbody = $("positionsTable").querySelector("tbody");
@@ -1543,17 +1772,17 @@ function renderPositions(results) {
   const rows = [...open, ...closed].sort((a, b) => b.openedAt - a.openedAt).slice(0, 30);
   if (!rows.length) {
     const tr = el("tr");
-    const td = el("td", "", "No paper trades yet — when the engine fires a LONG or SHORT, place one from the trade plan above and this desk starts building its own track record.");
-    td.colSpan = 10;
+    const td = el("td", "", "No paper trades yet — when the engine fires a LONG or SHORT on the Signal desk, place a trade from the plan and it appears here with live prices.");
+    td.colSpan = 11;
     td.className = "empty-note";
     tr.appendChild(td);
     tbody.appendChild(tr);
     return;
   }
   for (const p of rows) {
-    const res = results && results.find(r => r.asset.id === p.asset);
-    const cur = res ? res.an.price : p.entry;
+    const cur = curPrice(p);
     const isOpen = p.status === "open";
+    const editing = isOpen && state.editingId === p.id;
     const pnl = isOpen ? p.dir * (cur - p.entry) * p.qty : p.pnl;
     const r = isOpen ? (p.stopDist > 0 ? p.dir * (cur - p.entry) / p.stopDist : 0) : p.r;
     const tr = el("tr");
@@ -1565,9 +1794,26 @@ function renderPositions(results) {
     side.appendChild(sc);
     tr.appendChild(side);
     tr.appendChild(el("td", "num", fmtPrice(p.entry)));
-    tr.appendChild(el("td", "num", fmtPrice(p.stop)));
-    tr.appendChild(el("td", "num", fmtPrice(p.target)));
-    tr.appendChild(el("td", "num", fmtNum(p.qty, p.entry >= 1000 ? 4 : 2)));
+
+    let stopInp = null, tgtInp = null;
+    if (editing) {
+      const stopTd = el("td", "num");
+      stopInp = el("input", "cell-edit");
+      stopInp.type = "number"; stopInp.step = "any"; stopInp.value = String(p.stop);
+      stopTd.appendChild(stopInp);
+      tr.appendChild(stopTd);
+      const tgtTd = el("td", "num");
+      tgtInp = el("input", "cell-edit");
+      tgtInp.type = "number"; tgtInp.step = "any"; tgtInp.value = String(p.target);
+      tgtTd.appendChild(tgtInp);
+      tr.appendChild(tgtTd);
+    } else {
+      tr.appendChild(el("td", "num", fmtPrice(p.stop)));
+      tr.appendChild(el("td", "num", fmtPrice(p.target)));
+    }
+
+    tr.appendChild(el("td", "num", fmtNum(p.qty, p.entry >= 1000 ? 4 : 2) + (p.lev ? " · " + p.lev + "×" : "")));
+    tr.appendChild(el("td", "num", fmtPrice(isOpen ? cur : p.exit)));
     const pnlTd = el("td", "num", (pnl >= 0 ? "+" : "") + fmtMoney(pnl));
     pnlTd.style.color = pnl >= 0 ? getCss("--delta-up") : getCss("--delta-down");
     pnlTd.style.fontWeight = "650";
@@ -1578,8 +1824,15 @@ function renderPositions(results) {
       isOpen ? "OPEN" : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : "CLOSED");
     stTd.appendChild(chip);
     tr.appendChild(stTd);
+
     const actTd = el("td");
-    if (isOpen) {
+    actTd.style.whiteSpace = "nowrap";
+    if (isOpen && !editing) {
+      const edit = el("button", "mini-btn", "Edit");
+      edit.type = "button";
+      edit.addEventListener("click", () => { state.editingId = p.id; renderPositions(state.lastResults); });
+      actTd.appendChild(edit);
+      actTd.appendChild(document.createTextNode(" "));
       const btn = el("button", "mini-btn", "Close");
       btn.type = "button";
       btn.addEventListener("click", () => {
@@ -1593,6 +1846,35 @@ function renderPositions(results) {
         }
       });
       actTd.appendChild(btn);
+    } else if (editing) {
+      const save = el("button", "mini-btn", "Save");
+      save.type = "button";
+      save.addEventListener("click", () => {
+        const ns = parseFloat(stopInp.value), nt = parseFloat(tgtInp.value);
+        const stopOk = isFinite(ns) && (p.dir > 0 ? ns < p.entry : ns > p.entry);
+        const tgtOk = isFinite(nt) && (p.dir > 0 ? nt > p.entry : nt < p.entry);
+        if (!stopOk || !tgtOk) {
+          alert((stopOk ? "" : "Stop must stay on the loss side of the entry (" + fmtPrice(p.entry) + ").\n") +
+                (tgtOk ? "" : "Target must stay on the profit side of the entry (" + fmtPrice(p.entry) + ")."));
+          return;
+        }
+        const all = loadPositions();
+        const mine = all.find(q => q.id === p.id);
+        if (mine && mine.status === "open") {
+          mine.stop = ns; mine.target = nt;
+          mine.stopDist = Math.abs(mine.entry - ns);
+          mine.riskAmt = mine.qty * mine.stopDist;
+          savePositions(all);
+        }
+        state.editingId = null;
+        renderPositions(state.lastResults);
+      });
+      actTd.appendChild(save);
+      actTd.appendChild(document.createTextNode(" "));
+      const cancel = el("button", "mini-btn", "Cancel");
+      cancel.type = "button";
+      cancel.addEventListener("click", () => { state.editingId = null; renderPositions(state.lastResults); });
+      actTd.appendChild(cancel);
     }
     tr.appendChild(actTd);
     tbody.appendChild(tr);
@@ -1686,7 +1968,7 @@ function renderBacktest(asset, rows) {
     "Trust the engine only as far as its forward paper-trading record above keeps confirming it."));
 }
 
-function renderCharts(asset, an, candles, levels) {
+function renderCharts(asset, an, candles, levels, plan) {
   const s = candles.length - SHOWN;
   const win = (arr) => arr.slice(s);
   const times = win(candles.map(c => c.t));
@@ -1715,6 +1997,13 @@ function renderCharts(asset, an, candles, levels) {
   const priceRefs = [];
   if (levels && levels.res != null) priceRefs.push({ v: levels.res, label: "Resistance " + fmtPrice(levels.res) });
   if (levels && levels.sup != null) priceRefs.push({ v: levels.sup, label: "Support " + fmtPrice(levels.sup) });
+  // where to enter, and where the trade lives: entry / stop / target on the chart itself
+  if (plan && plan.dir !== 0) {
+    const dirTxt = plan.dir > 0 ? "LONG" : "SHORT";
+    priceRefs.push({ v: plan.entry, label: "Enter " + dirTxt + " " + fmtPrice(plan.entry) });
+    priceRefs.push({ v: plan.stop, label: "Stop " + fmtPrice(plan.stop), color: getCss("--status-critical") });
+    priceRefs.push({ v: plan.target, label: "Target " + fmtPrice(plan.target), color: getCss("--status-good") });
+  }
 
   renderChart($("priceChart"), $("priceTip"), {
     times, tf: state.tf, height: 300, endLabel: true, yRefs: priceRefs,
@@ -1851,11 +2140,12 @@ async function refresh(hard) {
     state.lastResults = results;
 
     settlePositions(results);
+    notifySignals(results);
     renderOverview(results);
     renderHero(asset, an, mtf);
     renderPlan(asset, an, plan, levels);
-    renderPositions(results);
-    renderCharts(asset, an, entry.candles, levels);
+    if (!state.editingId) renderPositions(results);   // don't wipe an in-progress row edit
+    renderCharts(asset, an, entry.candles, levels, plan);
     renderBreakdown(an);
     renderDataTable(asset, an, entry.candles);
     // context feeds render independently — a dead news API never blocks the signals
@@ -1905,6 +2195,31 @@ function wireControls() {
   $("clearHistory").addEventListener("click", () => {
     savePositions(loadPositions().filter(p => p.status === "open"));
     renderPositions(state.lastResults);
+  });
+  for (const b of document.querySelectorAll(".view-nav button"))
+    b.addEventListener("click", () => switchView(b.dataset.view));
+  const at = $("alertToggle");
+  at.checked = typeof Notification !== "undefined" && Notification.permission === "granted" &&
+               localStorage.getItem("csd_alerts") === "1";
+  at.addEventListener("change", async () => {
+    if (at.checked) {
+      if (typeof Notification === "undefined") {
+        at.checked = false;
+        alert("This browser doesn't support notifications.");
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { at.checked = false; return; }
+      try { localStorage.setItem("csd_alerts", "1"); } catch (_) {}
+      try {
+        new Notification("Crypto Signal Desk — alerts on", {
+          body: "You'll be notified when a LONG or SHORT signal fires on the " + TIMEFRAMES[state.tf].label +
+                " timeframe, with entry, stop and target. Keep this tab open — a web page can't notify a closed browser.",
+        });
+      } catch (_) {}
+    } else {
+      try { localStorage.setItem("csd_alerts", "0"); } catch (_) {}
+    }
   });
 
   let resizeT = null;

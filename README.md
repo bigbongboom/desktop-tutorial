@@ -23,10 +23,16 @@ One file, zero dependencies — open `index.html` in any browser.
 - **Backtester** — replays the exact engine bar-by-bar with zero lookahead (entries on
   the next bar's open, stop counted before target): win rate, profit factor, expectancy,
   max drawdown, equity curve, and a per-timeframe comparison vs buy & hold.
-- **Paper trading** — place the engine's trades in-app (stored in your browser), with
-  stops/targets settled against candle highs/lows, live P&L, and a forward win-rate
-  ledger. No exchange keys ever touch the page; one-click links execute for real on
-  Hyperliquid or Binance.
+- **Paper trading with an editable trade ticket** — customize size, leverage (1–10×,
+  with risk warnings), stop and target before placing, with live notional/margin/risk
+  math and validation. Stops/targets settle against candle highs/lows; no exchange keys
+  ever touch the page; one-click links execute for real on Hyperliquid or Binance.
+- **Portfolio portal** — a dedicated tab with paper equity, unrealized/realized P&L,
+  every open and closed trade at live prices (auto-refreshed every 60 s), and in-row
+  editing of an open trade's stop and target.
+- **Signal alerts** — opt-in browser notifications when a LONG or SHORT fires, including
+  entry price, stop and target (the tab must stay open — a static page cannot push to a
+  closed browser). Entry/stop/target are also drawn on the price chart.
 - **Crypto news feed** — latest headlines (CryptoCompare) tagged by asset, because a
   story can invalidate any technical setup.
 - **Key levels** — swing support/resistance drawn on the price chart and folded into

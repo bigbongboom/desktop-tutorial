@@ -208,6 +208,22 @@
   .table-wrap { overflow-x: auto; }
   .hidden { display: none; }
 
+  /* ---------- engine settings ---------- */
+  .engine-settings {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 16px; margin-bottom: 16px;
+  }
+  .engine-settings summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--text-secondary); }
+  .engine-settings summary:hover { color: var(--text-primary); }
+  .engine-settings .fields { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-top: 12px; }
+  .engine-settings label { font-size: 11px; color: var(--text-muted); font-weight: 600; display: flex; flex-direction: column; gap: 4px; }
+  .engine-settings select {
+    font: inherit; font-size: 12.5px; padding: 7px 9px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+  .engine-settings .reset-link { font-size: 12px; font-weight: 600; color: var(--series-1); background: none; border: none; cursor: pointer; padding: 8px 0; }
+  .settings-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+
   /* ---------- view navigation ---------- */
   .view-nav { display: flex; gap: 8px; margin: 0 0 16px; }
   .view-nav button {
@@ -296,8 +312,8 @@
   </header>
 
   <p class="risk-note">
-    <strong>How to read this desk:</strong> the engine scores twelve technical signals (trend, momentum,
-    mean-reversion, volume) into one long/short score per timeframe, then builds an ATR-based trade plan —
+    <strong>How to read this desk:</strong> the engine scores fourteen technical signals (trend, momentum,
+    mean-reversion, breakout, divergence, volume) into one long/short score per timeframe, then builds an ATR-based trade plan —
     entry, stop, target, hold window and position size from your capital and risk budget.
     It measures probabilities, not certainties: <strong>no model predicts markets. Never risk money you can't afford to lose.</strong>
   </p>
@@ -330,6 +346,49 @@
     <label title="Browser notifications when a LONG or SHORT signal fires. The tab must stay open — a static page cannot push to a closed browser."><input id="alertToggle" type="checkbox"> Signal alerts</label>
     <label class="toggle-table"><input id="tableToggle" type="checkbox"> Table view</label>
   </section>
+
+  <details class="engine-settings">
+    <summary>⚙ Engine settings — every knob is yours</summary>
+    <div class="fields">
+      <label>Trade trigger
+        <select id="cfgTrigger">
+          <option value="strong">STRONG signals only (recommended)</option>
+          <option value="standard">All LONG / SHORT signals</option>
+        </select>
+      </label>
+      <label>Signal threshold
+        <select id="cfgEnter">
+          <option value="12">±12 — aggressive, more signals</option>
+          <option value="18">±18 — balanced</option>
+          <option value="25">±25 — conservative</option>
+        </select>
+      </label>
+      <label>Strong threshold
+        <select id="cfgStrong">
+          <option value="35">±35 — more strong calls</option>
+          <option value="45">±45 — balanced</option>
+          <option value="55">±55 — only the cleanest</option>
+        </select>
+      </label>
+      <label>Stop loss
+        <select id="cfgStop">
+          <option value="1">1.0 ×ATR — tight</option>
+          <option value="1.5">1.5 ×ATR — balanced</option>
+          <option value="2">2.0 ×ATR — roomy</option>
+        </select>
+      </label>
+      <label>Take profit
+        <select id="cfgTgt">
+          <option value="2">2.0 ×ATR — quick</option>
+          <option value="2.5">2.5 ×ATR — balanced</option>
+          <option value="3.5">3.5 ×ATR — runner</option>
+          <option value="5">5.0 ×ATR — moonshot</option>
+        </select>
+      </label>
+      <button class="reset-link" id="cfgReset" type="button">Reset defaults</button>
+    </div>
+    <p class="settings-note">These settings drive everything — verdict labels, alerts, trade tickets AND the backtester. Tune them, then hit "Run backtest" to see how your configuration would have performed before you trust it. Strong signals automatically get +1.0 ×ATR extra target.</p>
+  </details>
 
   <!-- overview -->
   <section class="overview" id="overview" aria-label="Assets"></section>
@@ -508,6 +567,16 @@ const state = {
   editingId: null,            // position id currently being edited in the portfolio table
   lastLabels: {},             // last signal label per asset:tf (alert transition detection)
 };
+
+/* Engine settings — every knob customizable, persisted, and honored by the
+   verdict labels, trade plan, tickets, alerts AND the backtester. */
+const CFG_DEFAULTS = { enterTh: 18, strongTh: 45, stopMult: 1.5, tgtMult: 2.5, trigger: "strong" };
+function loadCfg() {
+  try { return { ...CFG_DEFAULTS, ...JSON.parse(localStorage.getItem("csd_cfg") || "{}") }; }
+  catch (_) { return { ...CFG_DEFAULTS }; }
+}
+function saveCfg() { try { localStorage.setItem("csd_cfg", JSON.stringify(state.cfg)); } catch (_) {} }
+state.cfg = loadCfg();
 
 /* ============================================================
    Small utilities (all DOM text goes through textContent)
@@ -898,9 +967,53 @@ function analyzeAt(candles, i, ind) {
     add("Volume thrust", reading, pts);
   }
 
+  // --- breakout & reversal (catches moves the moving averages lag on) ---
+  {
+    let pts = 0, reading = "warming up";
+    const N = 20;
+    if (i >= N) {
+      let hi = -Infinity, lo = Infinity;
+      for (let j = i - N; j < i; j++) { hi = Math.max(hi, candles[j].h); lo = Math.min(lo, candles[j].l); }
+      if (price > hi) { pts = 8; reading = "breakout above the 20-bar high"; }
+      else if (price < lo) { pts = -8; reading = "breakdown below the 20-bar low"; }
+      else {
+        const posn = (price - lo) / Math.max(hi - lo, 1e-9);
+        pts = (posn - 0.5) * 4;
+        reading = "at " + Math.round(posn * 100) + "% of the 20-bar range";
+      }
+    }
+    add("Range breakout (20)", reading, pts);
+  }
+  {
+    // RSI divergence — price pushes a new extreme but momentum refuses to
+    // confirm: the classic early tell of a top or bottom forming.
+    let pts = 0, reading = "none detected";
+    const L = 24;
+    if (i >= L + 5 && r[i] != null) {
+      let h1 = -Infinity, h1r = null, l1 = Infinity, l1r = null;   // recent half
+      let h0 = -Infinity, h0r = null, l0 = Infinity, l0r = null;   // older half
+      for (let j = i - L; j <= i; j++) {
+        if (r[j] == null) continue;
+        const c = closes[j];
+        if (j > i - Math.floor(L / 2)) {
+          if (c > h1) { h1 = c; h1r = r[j]; }
+          if (c < l1) { l1 = c; l1r = r[j]; }
+        } else {
+          if (c > h0) { h0 = c; h0r = r[j]; }
+          if (c < l0) { l0 = c; l0r = r[j]; }
+        }
+      }
+      if (h0r != null && h1r != null && h1 > h0 && h1r < h0r - 2) { pts = -8; reading = "bearish: higher high on weaker RSI"; }
+      else if (l0r != null && l1r != null && l1 < l0 && l1r > l0r + 2) { pts = 8; reading = "bullish: lower low on stronger RSI"; }
+    }
+    add("RSI divergence", reading, pts);
+  }
+
   const score = Math.round(clamp(comps.reduce((s, c) => s + c.pts, 0), -100, 100));
-  const label = score >= 45 ? "STRONG LONG" : score >= 18 ? "LONG"
-              : score <= -45 ? "STRONG SHORT" : score <= -18 ? "SHORT" : "NEUTRAL";
+  const eTh = (state.cfg && state.cfg.enterTh) || 18;
+  const sTh = (state.cfg && state.cfg.strongTh) || 45;
+  const label = score >= sTh ? "STRONG LONG" : score >= eTh ? "LONG"
+              : score <= -sTh ? "STRONG SHORT" : score <= -eTh ? "SHORT" : "NEUTRAL";
   const bulls = comps.filter(c => c.verdict === "bull").length;
   const bears = comps.filter(c => c.verdict === "bear").length;
   const agree = Math.max(bulls, bears) / Math.max(bulls + bears, 1);
@@ -958,11 +1071,13 @@ function backtest(candles) {
     const atrNow = ind.a[i];
     if (atrNow == null) continue;
     const s = analyzeAt(candles, i, ind);
-    if (Math.abs(s.score) < 18) continue;
+    const cfg = state.cfg;
+    const need = cfg.trigger === "strong" ? cfg.strongTh : cfg.enterTh;
+    if (Math.abs(s.score) < need) continue;
     const dir = s.score > 0 ? 1 : -1;
-    const strong = Math.abs(s.score) >= 45;
+    const strong = Math.abs(s.score) >= cfg.strongTh;
     const entry = candles[i + 1].o;
-    const stopDist = 1.5 * atrNow, tgtDist = (strong ? 3.5 : 2.5) * atrNow;
+    const stopDist = cfg.stopMult * atrNow, tgtDist = (strong ? cfg.tgtMult + 1 : cfg.tgtMult) * atrNow;
     pos = { dir, entry, stop: entry - dir * stopDist, target: entry + dir * tgtDist,
             riskDist: stopDist, openIdx: i + 1,
             maxBars: Math.ceil((tgtDist / (0.65 * atrNow)) * 1.7) };
@@ -986,10 +1101,11 @@ function backtest(candles) {
 
 /* Trade plan: ATR-anchored levels + fixed-fractional position sizing. */
 function tradePlan(an, tf, capital, riskPct) {
-  const dir = an.score >= 18 ? 1 : an.score <= -18 ? -1 : 0;
-  const strong = Math.abs(an.score) >= 45;
+  const cfg = state.cfg;
+  const dir = an.score >= cfg.enterTh ? 1 : an.score <= -cfg.enterTh ? -1 : 0;
+  const strong = Math.abs(an.score) >= cfg.strongTh;
   const entry = an.price;
-  const stopMult = 1.5, tgtMult = strong ? 3.5 : 2.5;
+  const stopMult = cfg.stopMult, tgtMult = strong ? cfg.tgtMult + 1 : cfg.tgtMult;
   const stopDist = stopMult * an.atrNow;
   const tgtDist = tgtMult * an.atrNow;
   const stop = entry - dir * stopDist;
@@ -1009,7 +1125,7 @@ function tradePlan(an, tf, capital, riskPct) {
   const bars = tgtDist / (0.65 * an.atrNow);       // expected bars to cover the target at typical range
   const holdLo = bars * 0.7 * tfMin, holdHi = bars * 1.7 * tfMin;
 
-  return { dir, strong, entry, stop, target, rr, stopDist, tgtDist,
+  return { dir, strong, entry, stop, target, rr, stopDist, tgtDist, stopMult, tgtMult,
            riskAmt, qty, notional, leverage, capped, profitAtTarget, holdLo, holdHi };
 }
 
@@ -1382,7 +1498,8 @@ function renderHero(asset, an, mtf) {
     "Composite score " + scoreTxt + " / ±100 · model conviction " + an.conviction + "% · " +
     an.bulls + " bullish vs " + an.bears + " bearish signals. " +
     (an.label === "NEUTRAL"
-      ? "No edge either way right now — the highest-EV move is to wait for the score to break past ±18."
+      ? (an.score !== 0 ? "Leaning " + (an.score > 0 ? "long" : "short") + ", but " : "Dead flat — ") +
+        "no edge past your ±" + state.cfg.enterTh + " trigger yet; the highest-EV move is to wait."
       : "ATR volatility " + an.atrPct.toFixed(2) + "% per bar sets the stop and target below.");
 
   const fill = $("meterFill");
@@ -1433,25 +1550,28 @@ function renderPlan(asset, an, plan, levels) {
   renderPlanActions(asset, plan);
 
   if (plan.dir === 0) {
-    $("planSub").textContent = "Score is inside the neutral band (−18…+18): the engine sees no exploitable edge on this timeframe right now.";
-    tile("Action", "STAND ASIDE", "wait for score to break ±18", getCss("--text-secondary"));
-    tile("Trigger to go long", "score ≥ +18", "recheck after the next bar close");
-    tile("Trigger to go short", "score ≤ −18", "recheck after the next bar close");
+    const th = state.cfg.enterTh;
+    const lean = an.score > 0 ? "leaning long (+" + an.score + ")" : an.score < 0 ? "leaning short (" + an.score + ")" : "dead flat";
+    $("planSub").textContent = "Score is inside your neutral band (−" + th + "…+" + th + "), currently " + lean + ": no edge strong enough to trade on this timeframe.";
+    tile("Action", "STAND ASIDE", "wait for score to break ±" + th, getCss("--text-secondary"));
+    tile("Trigger to go long", "score ≥ +" + th, "recheck after the next bar close");
+    tile("Trigger to go short", "score ≤ −" + th, "recheck after the next bar close");
     tile("Volatility (ATR)", fmtUsd(an.atrNow), an.atrPct.toFixed(2) + "% per bar");
-    $("planCaveat").textContent = "Flat is a position. The costliest habit in trading is forcing entries in a no-edge regime — capital preserved here funds the aligned setups later.";
+    $("planCaveat").textContent = "Flat is a position. The costliest habit in trading is forcing entries in a no-edge regime — capital preserved here funds the aligned setups later. You can widen or tighten the neutral band in Engine settings.";
     return;
   }
 
   const dirTxt = plan.dir > 0 ? "LONG" : "SHORT";
   const dirColor = plan.dir > 0 ? getCss("--status-good") : getCss("--status-critical");
   $("planSub").textContent =
-    "Levels are anchored to the 14-bar ATR (" + fmtUsd(an.atrNow) + ", " + an.atrPct.toFixed(2) + "% per bar): stop 1.5×ATR, target " +
-    (plan.strong ? "3.5" : "2.5") + "×ATR, sized so a stop-out costs exactly your risk budget.";
+    "Levels are anchored to the 14-bar ATR (" + fmtUsd(an.atrNow) + ", " + an.atrPct.toFixed(2) + "% per bar): stop " +
+    plan.stopMult.toFixed(1) + "×ATR, target " + plan.tgtMult.toFixed(1) +
+    "×ATR (your Engine settings), sized so a stop-out costs exactly your risk budget.";
 
   tile("Direction", (plan.dir > 0 ? "▲ " : "▼ ") + dirTxt, plan.strong ? "strong signal" : "standard signal", dirColor);
   tile("Entry (market)", fmtUsd(plan.entry), "or a limit slightly better");
-  tile("Stop loss", fmtUsd(plan.stop), "1.5×ATR — always place it");
-  tile("Take profit", fmtUsd(plan.target), (plan.strong ? "3.5" : "2.5") + "×ATR");
+  tile("Stop loss", fmtUsd(plan.stop), plan.stopMult.toFixed(1) + "×ATR — always place it");
+  tile("Take profit", fmtUsd(plan.target), plan.tgtMult.toFixed(1) + "×ATR" + (plan.strong ? " (strong bonus +1.0)" : ""));
   tile("Reward : risk", plan.rr.toFixed(2) + " : 1", "before fees/funding");
   tile("Expected hold", fmtDuration(plan.holdLo) + " – " + fmtDuration(plan.holdHi), "exit at stop/target if sooner");
   tile("Position size", fmtNum(plan.qty, plan.entry >= 1000 ? 4 : 2) + " " + asset.id, "≈ " + fmtMoney(plan.notional) + " notional");
@@ -1518,8 +1638,13 @@ function renderPlanActions(asset, plan) {
   const box = $("planActions");
   clear(box);
   const hasOpen = loadPositions().some(p => p.status === "open" && p.asset === asset.id);
+  const meetsTrigger = plan && plan.dir !== 0 && (state.cfg.trigger !== "strong" || plan.strong);
 
-  if (plan && plan.dir !== 0 && !hasOpen) {
+  if (plan && plan.dir !== 0 && !meetsTrigger) {
+    box.appendChild(el("span", "ticket-warn",
+      "Signal is " + (plan.dir > 0 ? "LONG" : "SHORT") + " but below your STRONG-only trade trigger (±" + state.cfg.strongTh +
+      ") — the ticket unlocks on strong signals. Switch the trade trigger to “All signals” in Engine settings to trade this one."));
+  } else if (meetsTrigger && !hasOpen) {
     const t = ensureTicket(asset, plan);
     const ticket = el("div", "ticket");
     ticket.appendChild(el("h3", "", "Customize the trade before placing — engine defaults are pre-filled"));
@@ -1639,10 +1764,10 @@ function notifySignals(results) {
     const was = prev[key] || "NEUTRAL";
     next[key] = an.label;
     if (!had || !alertsEnabled()) continue;      // first sight of a pair is the baseline, never an alert
+    const meets = (l) => state.cfg.trigger === "strong" ? l.startsWith("STRONG") : (l.includes("LONG") || l.includes("SHORT"));
     const dir = an.label.includes("LONG") ? 1 : an.label.includes("SHORT") ? -1 : 0;
     const wasDir = was.includes("LONG") ? 1 : was.includes("SHORT") ? -1 : 0;
-    const upgraded = an.label.startsWith("STRONG") && !was.startsWith("STRONG");
-    if (dir !== 0 && (dir !== wasDir || upgraded)) {
+    if (meets(an.label) && (!meets(was) || dir !== wasDir)) {
       const plan = tradePlan(an, state.tf, state.capital, state.riskPct);
       try {
         new Notification(asset.id + ": " + an.label + " · " + TIMEFRAMES[state.tf].label + " chart", {
@@ -1907,7 +2032,10 @@ function renderBacktest(asset, rows) {
   const anySim = rows.some(r => r.source === "Simulated");
   box.appendChild(el("p", "sub",
     asset.name + " — engine replayed on " + selRow.bt.barsTested + " × " + TIMEFRAMES[selRow.tf].label +
-    " bars" + (anySim ? " (SIMULATED data — a demo of the method, not real accuracy)" : "") + "."));
+    " bars with your settings (trigger: " + (state.cfg.trigger === "strong" ? "STRONG only" : "all signals") +
+    ", entry ±" + (state.cfg.trigger === "strong" ? state.cfg.strongTh : state.cfg.enterTh) +
+    ", stop " + state.cfg.stopMult.toFixed(1) + "×ATR, target " + state.cfg.tgtMult.toFixed(1) + "×ATR)" +
+    (anySim ? " — SIMULATED data, a demo of the method, not real accuracy" : "") + "."));
 
   const st = selRow.bt.stats;
   const tiles = el("div", "tiles");
@@ -2198,6 +2326,35 @@ function wireControls() {
   });
   for (const b of document.querySelectorAll(".view-nav button"))
     b.addEventListener("click", () => switchView(b.dataset.view));
+
+  // engine settings — sync UI from persisted config, save + recompute on change
+  const cfgFields = { cfgTrigger: "trigger", cfgEnter: "enterTh", cfgStrong: "strongTh", cfgStop: "stopMult", cfgTgt: "tgtMult" };
+  const syncCfgUI = () => {
+    $("cfgTrigger").value = state.cfg.trigger;
+    $("cfgEnter").value = String(state.cfg.enterTh);
+    $("cfgStrong").value = String(state.cfg.strongTh);
+    $("cfgStop").value = String(state.cfg.stopMult);
+    $("cfgTgt").value = String(state.cfg.tgtMult);
+  };
+  syncCfgUI();
+  for (const [id, key] of Object.entries(cfgFields)) {
+    $(id).addEventListener("change", () => {
+      const v = $(id).value;
+      state.cfg[key] = key === "trigger" ? v : parseFloat(v);
+      saveCfg();
+      state.ticket = null;
+      state.lastLabels = {};   // re-baseline alerts under the new thresholds
+      refresh(false);
+    });
+  }
+  $("cfgReset").addEventListener("click", () => {
+    state.cfg = { ...CFG_DEFAULTS };
+    saveCfg();
+    syncCfgUI();
+    state.ticket = null;
+    state.lastLabels = {};
+    refresh(false);
+  });
   const at = $("alertToggle");
   at.checked = typeof Notification !== "undefined" && Notification.permission === "granted" &&
                localStorage.getItem("csd_alerts") === "1";

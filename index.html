@@ -229,6 +229,8 @@
   }
   .engine-settings .reset-link { font-size: 12px; font-weight: 600; color: var(--series-1); background: none; border: none; cursor: pointer; padding: 8px 0; }
   .settings-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+  .ai-toggle { font-size: 13px; display: flex; gap: 8px; align-items: center; color: var(--text-primary); cursor: pointer; }
+  .ai-status { margin: 8px 0 12px; }
 
   /* ---------- view navigation ---------- */
   .view-nav { display: flex; gap: 8px; margin: 0 0 16px; }
@@ -419,6 +421,21 @@
         <p class="mtf-note" id="mtfNote"></p>
       </div>
     </div>
+  </section>
+
+  <!-- AI auto-trader -->
+  <section class="card">
+    <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
+    <p class="sub">On every refresh the engine sweeps all 4 markets × 5 timeframes, scores each chart, and ranks the setups by signal strength, timeframe agreement and crowd positioning. Flip on Autopilot and it places the top calls in your paper account automatically — one position per market, three max, sized at your risk budget. It's the same deterministic, backtestable engine applied everywhere at once — not a black box — and it only ever trades paper: no web page should be trusted with real exchange keys.</p>
+    <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
+    <p class="sub ai-status" id="aiStatus">Scanning…</p>
+    <div class="table-wrap"><table id="aiTable">
+      <thead><tr>
+        <th>#</th><th>Market</th><th>Chart</th><th>Decision</th><th class="num">Score</th>
+        <th class="num">Conviction</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
   </section>
 
   <!-- market pulse -->
@@ -1223,9 +1240,14 @@ function settlePositions(results) {
     for (const b of res.entry.candles) {
       if (b.t < pos.openedAt) continue;
       const hitStop = pos.dir > 0 ? b.l <= pos.stop : b.h >= pos.stop;
+      const hitLiq = pos.liq != null && (pos.dir > 0 ? b.l <= pos.liq : b.h >= pos.liq);
       const hitTgt = pos.dir > 0 ? b.h >= pos.target : b.l <= pos.target;
-      if (hitStop || hitTgt) {
-        closePosition(pos, hitStop ? pos.stop : pos.target, hitStop ? "sl" : "tp", b.t);
+      if (hitStop || hitLiq || hitTgt) {
+        // whichever adverse level is closer to entry triggers first
+        const stopFirst = hitStop && (!hitLiq || Math.abs(pos.entry - pos.stop) <= Math.abs(pos.entry - pos.liq));
+        if (stopFirst) closePosition(pos, pos.stop, "sl", b.t);
+        else if (hitLiq) closePosition(pos, pos.liq, "liq", b.t);
+        else closePosition(pos, pos.target, "tp", b.t);
         break;
       }
     }
@@ -1691,12 +1713,21 @@ function validateTicket(plan, t) {
   const stopDist = Math.abs(entry - t.stop);
   const riskAmt = t.qty * stopDist;
   const riskPct = state.capital > 0 ? (riskAmt / state.capital) * 100 : 0;
+  const liq = liqPrice(entry, t.dir, t.lev);
   if (!errs.length && riskPct > 3) warns.push("⚠ A stop-out costs " + riskPct.toFixed(1) + "% of your capital — professionals stay at 1–2% per trade.");
-  if (t.lev > 5) warns.push("⚠ Above 5× leverage, normal crypto volatility reaches liquidation territory fast.");
-  return { ok: errs.length === 0, errs, warns, notional, stopDist, riskAmt, riskPct,
+  if (liq != null && (t.dir > 0 ? t.stop < liq : t.stop > liq))
+    warns.push("🚨 Your stop sits BEYOND the estimated liquidation price (" + fmtPrice(liq) + ") — the exchange would liquidate you first, losing the full margin.");
+  if (t.lev > 5 && t.lev <= 15) warns.push("⚠ " + t.lev + "× leverage: a " + (99 / t.lev).toFixed(1) + "% adverse move liquidates the position.");
+  else if (t.lev > 15) warns.push("🚨 " + t.lev + "× leverage: liquidation sits only " + (99 / t.lev).toFixed(1) + "% away — routine hourly volatility can erase the entire margin. Professionals rarely exceed 5×.");
+  return { ok: errs.length === 0, errs, warns, notional, stopDist, riskAmt, riskPct, liq,
            margin: t.lev > 0 ? notional / t.lev : notional,
            profit: t.qty * Math.abs(t.target - entry),
            rr: stopDist > 0 ? Math.abs(t.target - entry) / stopDist : 0 };
+}
+/* Estimated isolated-margin liquidation price (~1% maintenance buffer). */
+function liqPrice(entry, dir, lev) {
+  if (!(lev >= 2)) return null;      // 1× spot can't be liquidated
+  return dir > 0 ? entry * (1 - 0.99 / lev) : entry * (1 + 0.99 / lev);
 }
 function renderPlanActions(asset, plan) {
   const box = $("planActions");
@@ -1725,13 +1756,14 @@ function renderPlanActions(asset, plan) {
     mkField("Size (" + asset.id + ")", t.qty, "any", v => { t.qty = v; });
     const levLbl = el("label", "", "Leverage");
     const levSel = el("select");
-    for (const lv of [1, 2, 3, 5, 10]) {
-      const o = el("option", "", lv + "×");
+    const LEVS = [1, 2, 3, 5, 10, 20, 40];
+    for (const lv of LEVS) {
+      const o = el("option", "", lv + "×" + (lv >= 20 ? " ⚠" : ""));
       o.value = String(lv);
       if (lv === t.lev) o.selected = true;
       levSel.appendChild(o);
     }
-    if (![1, 2, 3, 5, 10].includes(t.lev)) levSel.value = "5";
+    if (!LEVS.includes(t.lev)) levSel.value = "5";
     levSel.addEventListener("change", () => { t.lev = parseInt(levSel.value, 10); t.dirty = true; update(); });
     levLbl.appendChild(levSel);
     fields.appendChild(levLbl);
@@ -1760,7 +1792,8 @@ function renderPlanActions(asset, plan) {
       strong(fmtMoney(v.notional));
       plain(" · margin " + fmtMoney(v.margin) + " at " + t.lev + "× · risk ");
       strong(fmtMoney(v.riskAmt) + " (" + v.riskPct.toFixed(1) + "% of capital)");
-      plain(" · at target +" + fmtMoney(v.profit) + " · reward:risk " + v.rr.toFixed(2) + ":1");
+      plain(" · at target +" + fmtMoney(v.profit) + " · reward:risk " + v.rr.toFixed(2) + ":1" +
+            (v.liq != null ? " · est. liquidation " + fmtPrice(v.liq) : ""));
       errBox.textContent = v.errs.join(" ");
       warnBox.textContent = v.warns.join(" ");
       b.disabled = !v.ok;
@@ -1806,8 +1839,8 @@ function onPlaceTrade() {
   positions.push({
     id: "p" + Date.now(), asset: lp.assetId, tf: lp.tf, dir: t.dir,
     entry: lp.plan.entry, stop: t.stop, target: t.target,
-    qty: t.qty, lev: t.lev, riskAmt: v.riskAmt, stopDist: v.stopDist,
-    openedAt: Date.now(), status: "open",
+    qty: t.qty, lev: t.lev, liq: v.liq, riskAmt: v.riskAmt, stopDist: v.stopDist,
+    openedAt: Date.now(), status: "open", placedBy: "manual",
   });
   savePositions(positions);
   state.ticket = null;
@@ -1845,6 +1878,143 @@ function notifySignals(results) {
     }
   }
   state.lastLabels = next;
+}
+
+/* ============================================================
+   Auto-Trader AI — sweeps every market × timeframe, ranks the
+   setups, and (with Autopilot on) trades the paper account.
+   ============================================================ */
+async function aiScanAndTrade() {
+  const combos = [];
+  for (const a of ASSETS) for (const tf of Object.keys(TIMEFRAMES)) combos.push({ a, tf });
+  const scans = await Promise.all(combos.map(async ({ a, tf }) => {
+    try {
+      const entry = await getCandles(a.id, tf, 150000);
+      return { asset: a, tf, an: analyze(entry.candles), source: entry.source };
+    } catch (_) { return null; }
+  }));
+  const valid = scans.filter(Boolean);
+  const byAsset = {};
+  for (const sc of valid) (byAsset[sc.asset.id] = byAsset[sc.asset.id] || []).push(sc);
+
+  const cfg = state.cfg;
+  const decisions = [];
+  for (const sc of valid) {
+    if (Math.abs(sc.an.score) < cfg.enterTh) continue;
+    const dir = sc.an.score > 0 ? 1 : -1;
+    const agree = byAsset[sc.asset.id]
+      .filter(o => o.tf !== sc.tf && Math.abs(o.an.score) >= cfg.enterTh && Math.sign(o.an.score) === dir).length;
+    let rank = Math.abs(sc.an.score) + 8 * agree + (Math.abs(sc.an.score) >= cfg.strongTh ? 10 : 0);
+    const ctx = state.pulse && state.pulse.ctx[sc.asset.hl];
+    if (ctx && isFinite(ctx.funding)) {
+      const apr = ctx.funding * 24 * 365 * 100;
+      if (apr > 25) rank += dir > 0 ? -6 : 4;        // crowded longs: fade fresh longs
+      else if (apr < -25) rank += dir > 0 ? 4 : -6;  // crowded shorts: squeeze fuel
+    }
+    const strong = Math.abs(sc.an.score) >= cfg.strongTh;
+    const stopDist = cfg.stopMult * sc.an.atrNow;
+    const tgtDist = (strong ? cfg.tgtMult + 1 : cfg.tgtMult) * sc.an.atrNow;
+    decisions.push({
+      asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
+      conviction: sc.an.conviction, rank, entry: sc.an.price,
+      stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
+      stopDist, sim: sc.source === "Simulated",
+    });
+  }
+  decisions.sort((a, b) => b.rank - a.rank);
+  state.lastDecisions = decisions.slice(0, 8);
+  state.scannedCount = valid.length;
+  if (state.autoPilot) autoPilotExecute(state.lastDecisions);
+  renderAiBoard();
+}
+
+function autoPilotExecute(decisions) {
+  const cfg = state.cfg;
+  const meets = (d) => cfg.trigger === "strong" ? Math.abs(d.score) >= cfg.strongTh : true;
+  const positions = loadPositions();
+  const openAssets = new Set(positions.filter(p => p.status === "open").map(p => p.asset));
+  let openCount = openAssets.size, placed = 0;
+  for (const d of decisions || []) {
+    if (openCount >= 3) break;                        // hard cap: three simultaneous positions
+    if (!meets(d) || openAssets.has(d.asset.id) || !(d.stopDist > 0)) continue;
+    let qty = (state.capital * state.riskPct) / d.stopDist;
+    let notional = qty * d.entry;
+    const maxNotional = state.capital * 5;            // autopilot never exceeds 5×
+    if (notional > maxNotional) { qty = maxNotional / d.entry; notional = maxNotional; }
+    const lev = Math.max(1, Math.min(5, Math.ceil(notional / Math.max(state.capital, 1))));
+    positions.push({
+      id: "p" + Date.now() + Math.random().toString(36).slice(2, 6),
+      asset: d.asset.id, tf: d.tf, dir: d.dir, entry: d.entry, stop: d.stop, target: d.target,
+      qty, lev, liq: liqPrice(d.entry, d.dir, lev), riskAmt: qty * d.stopDist, stopDist: d.stopDist,
+      openedAt: Date.now(), status: "open", placedBy: "AI",
+    });
+    openAssets.add(d.asset.id); openCount++; placed++;
+    if (alertsEnabled()) {
+      try {
+        new Notification("🤖 Autopilot: " + (d.dir > 0 ? "LONG " : "SHORT ") + d.asset.id + " · " + TIMEFRAMES[d.tf].label, {
+          body: "Entry " + fmtUsd(d.entry) + " · stop " + fmtUsd(d.stop) + " · target " + fmtUsd(d.target) +
+                " · score " + (d.score > 0 ? "+" : "") + d.score,
+        });
+      } catch (_) {}
+    }
+  }
+  if (placed) {
+    savePositions(positions);
+    if (state.lastResults && !state.editingId) renderPositions(state.lastResults);
+    if (state.lastPlan) renderPlanActions(ASSETS.find(a => a.id === state.lastPlan.assetId), state.lastPlan.plan);
+  }
+}
+
+function renderAiBoard() {
+  const tbody = $("aiTable").querySelector("tbody");
+  clear(tbody);
+  const ds = state.lastDecisions || [];
+  const anySim = ds.some(d => d.sim);
+  $("aiStatus").textContent =
+    "Scanned " + (state.scannedCount || 0) + " charts across " + ASSETS.length + " markets · " +
+    (ds.length
+      ? "top call: " + ds[0].asset.id + " " + TIMEFRAMES[ds[0].tf].label + " " + ds[0].label + " (" + (ds[0].score > 0 ? "+" : "") + ds[0].score + ")"
+      : "no setups clear your threshold — waiting is the decision") +
+    (anySim ? " · SIMULATED data" : "") + " · Autopilot " + (state.autoPilot ? "ON (paper)" : "off");
+  if (!ds.length) {
+    const tr = el("tr");
+    const td = el("td", "empty-note", "Nothing qualifies under your Engine settings right now. The AI re-scans every 60 seconds.");
+    td.colSpan = 10;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  ds.forEach((d, i) => {
+    const tr = el("tr");
+    tr.appendChild(el("td", "num", String(i + 1)));
+    tr.appendChild(el("td", "", d.asset.id + "/USD"));
+    tr.appendChild(el("td", "", TIMEFRAMES[d.tf].label));
+    const dtd = el("td");
+    const vc = el("span", "verdict-cell " + (d.dir > 0 ? "bull" : "bear"));
+    vc.appendChild(el("span", "dot"));
+    vc.appendChild(el("span", "", d.label));
+    dtd.appendChild(vc);
+    tr.appendChild(dtd);
+    tr.appendChild(el("td", "num", (d.score > 0 ? "+" : "") + d.score));
+    tr.appendChild(el("td", "num", d.conviction + "%"));
+    tr.appendChild(el("td", "num", fmtPrice(d.entry)));
+    tr.appendChild(el("td", "num", fmtPrice(d.stop)));
+    tr.appendChild(el("td", "num", fmtPrice(d.target)));
+    const atd = el("td");
+    const btn = el("button", "mini-btn", "Load →");
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      state.asset = d.asset.id;
+      state.tf = d.tf;
+      for (const b of $("tfGroup").querySelectorAll("button")) b.classList.toggle("active", b.dataset.tf === d.tf);
+      switchView("desk");
+      refresh(false);
+      $("planTitle").scrollIntoView({ behavior: "smooth" });
+    });
+    atd.appendChild(btn);
+    tr.appendChild(atd);
+    tbody.appendChild(tr);
+  });
 }
 
 function switchView(view) {
@@ -1976,7 +2146,7 @@ function renderPositions(results) {
     const pnl = isOpen ? p.dir * (cur - p.entry) * p.qty : p.pnl;
     const r = isOpen ? (p.stopDist > 0 ? p.dir * (cur - p.entry) / p.stopDist : 0) : p.r;
     const tr = el("tr");
-    tr.appendChild(el("td", "", p.asset + " · " + p.tf));
+    tr.appendChild(el("td", "", (p.placedBy === "AI" ? "🤖 " : "") + p.asset + " · " + p.tf));
     const side = el("td");
     const sc = el("span", "verdict-cell " + (p.dir > 0 ? "bull" : "bear"));
     sc.appendChild(el("span", "dot"));
@@ -2011,7 +2181,7 @@ function renderPositions(results) {
     tr.appendChild(el("td", "num", (r >= 0 ? "+" : "") + r.toFixed(2)));
     const stTd = el("td");
     const chip = el("span", "pos-chip " + (isOpen ? "open" : (p.pnl > 0 ? "win" : "loss")),
-      isOpen ? "OPEN" : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : "CLOSED");
+      isOpen ? "OPEN" : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : p.result === "liq" ? "LIQUIDATED" : "CLOSED");
     stTd.appendChild(chip);
     tr.appendChild(stTd);
 
@@ -2207,7 +2377,7 @@ function renderCharts(asset, an, candles, levels, plan) {
   if (openPos) {
     let fromIdx = times.findIndex(t => t >= openPos.openedAt);
     if (fromIdx < 0) fromIdx = Math.max(0, times.length - 2);
-    posCfg = { entry: openPos.entry, stop: openPos.stop, target: openPos.target, dir: openPos.dir, fromIdx, open: true };
+    posCfg = { entry: openPos.entry, stop: openPos.stop, target: openPos.target, dir: openPos.dir, fromIdx, open: true, liq: openPos.liq };
   } else if (plan && plan.dir !== 0) {
     posCfg = { entry: plan.entry, stop: plan.stop, target: plan.target, dir: plan.dir, fromIdx: Math.round(times.length * 0.86), open: false };
   }
@@ -2223,6 +2393,8 @@ function renderCharts(asset, an, candles, levels, plan) {
     priceRefs.push({ v: posCfg.entry, label: (posCfg.open ? "OPEN " : "") + (posCfg.dir > 0 ? "LONG" : "SHORT") + " ENTRY " + fmtPrice(posCfg.entry) });
     priceRefs.push({ v: posCfg.stop, label: "SL " + fmtPrice(posCfg.stop) + " (" + pct(posCfg.stop) + ")", color: getCss("--status-critical") });
     priceRefs.push({ v: posCfg.target, label: "TP " + fmtPrice(posCfg.target) + " (" + pct(posCfg.target) + ")", color: getCss("--status-good") });
+    if (posCfg.liq != null)
+      priceRefs.push({ v: posCfg.liq, label: "LIQ " + fmtPrice(posCfg.liq) + " (" + pct(posCfg.liq) + ")", color: getCss("--status-critical") });
   }
 
   if (styleCandles) {
@@ -2380,9 +2552,10 @@ async function refresh(hard) {
     renderCharts(asset, an, entry.candles, levels, plan);
     renderBreakdown(an);
     renderDataTable(asset, an, entry.candles);
-    // context feeds render independently — a dead news API never blocks the signals
+    // context feeds and the AI sweep render independently — a dead feed never blocks the signals
     refreshPulse(asset).catch(() => {});
     refreshNews().catch(() => {});
+    aiScanAndTrade().catch(() => {});
 
     const sources = new Set(results.map(r => r.entry.source));
     const badge = $("srcBadge");
@@ -2430,6 +2603,14 @@ function wireControls() {
   });
   for (const b of document.querySelectorAll(".view-nav button"))
     b.addEventListener("click", () => switchView(b.dataset.view));
+  state.autoPilot = (() => { try { return localStorage.getItem("csd_auto") === "1"; } catch (_) { return false; } })();
+  $("autoToggle").checked = state.autoPilot;
+  $("autoToggle").addEventListener("change", () => {
+    state.autoPilot = $("autoToggle").checked;
+    try { localStorage.setItem("csd_auto", state.autoPilot ? "1" : "0"); } catch (_) {}
+    if (state.autoPilot && state.lastDecisions) autoPilotExecute(state.lastDecisions);
+    renderAiBoard();
+  });
   $("styleGroup").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-cs]");
     if (!b) return;

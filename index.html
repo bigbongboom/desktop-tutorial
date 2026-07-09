@@ -549,7 +549,7 @@
 
     <section class="card">
       <h2>Your trades</h2>
-      <p class="sub">Trades are simulated and saved in this browser. No exchange API keys ever touch this page — a public static site cannot protect secrets, so real execution stays on the exchange via the links in the trade plan. Stops and targets settle against candle highs/lows on each refresh. Use Edit to move an open trade's stop or target.</p>
+      <p class="sub">Trades are simulated and saved in this browser — balances, journal and lessons survive restarts, and "Clear closed trades" only tidies this list, never the profits. Tip: always open the dashboard in the same browser (Safari or Chrome, not a chat app's built-in browser, which uses separate temporary storage) — and use Export to back your history up or move it to another device. No exchange API keys ever touch this page; real execution stays on the exchange via the links in the trade plan.</p>
       <div class="tiles" id="paperStats"></div>
       <div class="table-wrap"><table id="positionsTable">
         <thead><tr>
@@ -558,7 +558,13 @@
         </tr></thead>
         <tbody></tbody>
       </table></div>
-      <div class="plan-actions"><button class="btn" id="clearHistory" type="button">Clear closed trades</button></div>
+      <div class="plan-actions">
+        <button class="btn" id="clearHistory" type="button">Clear closed trades</button>
+        <button class="btn" id="resetAiBtn" type="button">Reset AI account to $100</button>
+        <button class="btn" id="exportBtn" type="button">Export history</button>
+        <button class="btn" id="importBtn" type="button">Import history</button>
+        <input type="file" id="importFile" accept="application/json,.json" class="hidden">
+      </div>
     </section>
   </div><!-- /portfolioView -->
 
@@ -622,6 +628,34 @@ function loadCfg() {
 function saveCfg() { try { localStorage.setItem("csd_cfg", JSON.stringify(state.cfg)); } catch (_) {} }
 state.cfg = loadCfg();
 state.chartStyle = (() => { try { return localStorage.getItem("csd_style") === "line" ? "line" : "candles"; } catch (_) { return "candles"; } })();
+// ask the browser to protect this site's storage from eviction (best-effort)
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}
+
+/* Bank ledgers — realized P&L accumulates here permanently, so clearing the
+   closed-trades LIST never resets balances. */
+function loadBankFor(key, migrate) {
+  try {
+    const b = JSON.parse(localStorage.getItem(key) || "null");
+    if (b && isFinite(b.realized)) return b;
+  } catch (_) {}
+  const b = { realized: migrate() };
+  try { localStorage.setItem(key, JSON.stringify(b)); } catch (_) {}
+  return b;
+}
+function aiBank() {
+  return loadBankFor("csd_ai_bank", () =>
+    loadPositions().filter(p => p.placedBy === "AI" && p.status === "closed").reduce((s, p) => s + p.pnl, 0));
+}
+function userBank() {
+  return loadBankFor("csd_user_bank", () =>
+    loadPositions().filter(p => p.placedBy !== "AI" && p.status === "closed").reduce((s, p) => s + p.pnl, 0));
+}
+function bankAdd(isAi, pnl) {
+  const key = isAi ? "csd_ai_bank" : "csd_user_bank";
+  const b = isAi ? aiBank() : userBank();
+  b.realized += pnl;
+  try { localStorage.setItem(key, JSON.stringify(b)); } catch (_) {}
+}
 
 /* ============================================================
    Small utilities (all DOM text goes through textContent)
@@ -1300,6 +1334,7 @@ function recordTradeOutcome(pos) {
   j.push({ t: pos.closedAt || Date.now(), asset: pos.asset, tf: pos.tf, dir: pos.dir,
            result: pos.result, r: pos.r, pnl: pos.pnl, by: pos.placedBy || "manual", lesson });
   saveJournal(j);
+  bankAdd(pos.placedBy === "AI", pos.pnl);   // profits persist in the bank ledger forever
 }
 /* Settle open positions against candle highs/lows since entry (stop counted first). */
 function settlePositions(results) {
@@ -2023,13 +2058,12 @@ async function aiScanAndTrade() {
 const AI_START = 100;   // the AI's own bankroll, separate from your account
 function aiAccountStats(results) {
   const positions = loadPositions();
-  const ai = positions.filter(p => p.placedBy === "AI");
+  const openAi = positions.filter(p => p.placedBy === "AI" && p.status === "open");
   const cur = (p) => {
     const r = results && results.find(x => x.asset.id === p.asset);
     return r ? r.an.price : p.entry;
   };
-  const realized = ai.filter(p => p.status === "closed").reduce((s, p) => s + p.pnl, 0);
-  const openAi = ai.filter(p => p.status === "open");
+  const realized = aiBank().realized;   // from the permanent ledger, not the (clearable) trade list
   const unrealized = openAi.reduce((s, p) => s + p.dir * (cur(p) - p.entry) * p.qty, 0);
   const invested = openAi.reduce((s, p) => s + (p.invested != null ? p.invested : (p.qty * p.entry) / (p.lev || 1)), 0);
   return { equity: AI_START + realized + unrealized, realized, unrealized, invested, openCount: openAi.length };
@@ -2102,15 +2136,14 @@ function renderAiBoard() {
     " · AI account " + fmtMoney(ai.equity) + " (started " + fmtMoney(AI_START) + ", " + fmtMoney(ai.invested) + " invested)" +
     (ai.equity < 10 ? " — DEPLETED: use 'Clear closed trades' in the Portfolio to restart it at $100" : "");
 
-  // running performance log + journal
-  const aiClosed = loadPositions().filter(p => p.placedBy === "AI" && p.status === "closed");
-  const aiWins = aiClosed.filter(p => p.pnl > 0).length;
-  const netR = aiClosed.reduce((s, p) => s + (isFinite(p.r) ? p.r : 0), 0);
-  const netPnl = aiClosed.reduce((s, p) => s + p.pnl, 0);
-  $("aiPerf").textContent = "Performance log: " + aiClosed.length + " closed AI trade" + (aiClosed.length === 1 ? "" : "s") +
-    " · win rate " + (aiClosed.length ? Math.round((aiWins / aiClosed.length) * 100) + "%" : "—") +
-    " · realized " + (netPnl >= 0 ? "+" : "") + fmtMoney(netPnl) + " (" + (netR >= 0 ? "+" : "") + netR.toFixed(2) + "R)" +
-    " · portfolio value " + fmtMoney(ai.equity) + " from a $100.00 base.";
+  // running performance log (journal + permanent ledger — survives list clears and restarts)
+  const aiTrades = loadJournal().filter(e => e.by === "AI");
+  const aiWins = aiTrades.filter(e => e.pnl > 0).length;
+  const netR = aiTrades.reduce((s, e) => s + (isFinite(e.r) ? e.r : 0), 0);
+  $("aiPerf").textContent = "Performance log: " + aiTrades.length + " closed AI trade" + (aiTrades.length === 1 ? "" : "s") +
+    " · win rate " + (aiTrades.length ? Math.round((aiWins / aiTrades.length) * 100) + "%" : "—") +
+    " · realized " + (ai.realized >= 0 ? "+" : "") + fmtMoney(ai.realized) + " all-time (" + (netR >= 0 ? "+" : "") + netR.toFixed(2) + "R)" +
+    " · portfolio value " + fmtMoney(ai.equity) + " from a $100.00 base. Saved in this browser — it survives restarts.";
   const jbox = $("aiJournal");
   clear(jbox);
   const entries = loadJournal().slice(-6).reverse();
@@ -2260,8 +2293,8 @@ function renderPositions(results) {
 
   // account summary — your manual account and the AI's own $100 account, separately
   const isAi = (p) => p.placedBy === "AI";
-  const mClosed = closed.filter(p => !isAi(p)), mOpen = open.filter(p => !isAi(p));
-  const mRealized = mClosed.reduce((s, p) => s + p.pnl, 0);
+  const mOpen = open.filter(p => !isAi(p));
+  const mRealized = userBank().realized;   // permanent ledger — survives clearing the list
   const mUnrealized = mOpen.reduce((s, p) => s + p.dir * (curPrice(p) - p.entry) * p.qty, 0);
   const mEquity = state.capital + mRealized + mUnrealized;
   const ai = aiAccountStats(results);
@@ -2789,6 +2822,46 @@ function wireControls() {
     savePositions(loadPositions().filter(p => p.status === "open"));
     renderPositions(state.lastResults);
     renderAiBoard();
+  });
+  $("resetAiBtn").addEventListener("click", () => {
+    if (!confirm("Reset the AI account to $100? This removes all AI positions and zeroes its realized P&L. The journal and learned lessons are kept.")) return;
+    savePositions(loadPositions().filter(p => p.placedBy !== "AI"));
+    try { localStorage.setItem("csd_ai_bank", JSON.stringify({ realized: 0 })); } catch (_) {}
+    renderPositions(state.lastResults);
+    renderAiBoard();
+  });
+  $("exportBtn").addEventListener("click", () => {
+    const keys = ["csd_positions", "csd_journal", "csd_learn", "csd_ai_bank", "csd_user_bank", "csd_cfg", "csd_alerts", "csd_auto", "csd_style"];
+    const data = {};
+    for (const k of keys) { try { const v = localStorage.getItem(k); if (v != null) data[k] = v; } catch (_) {} }
+    const blob = new Blob([JSON.stringify({ app: "crypto-signal-desk", version: 1, exportedAt: new Date().toISOString(), data }, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "crypto-signal-desk-backup.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+  $("importBtn").addEventListener("click", () => $("importFile").click());
+  $("importFile").addEventListener("change", () => {
+    const f = $("importFile").files[0];
+    $("importFile").value = "";
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const j = JSON.parse(reader.result);
+        const data = j && j.data;
+        if (!data || typeof data !== "object") throw new Error("bad backup");
+        let n = 0;
+        for (const [k, v] of Object.entries(data))
+          if (k.startsWith("csd_") && typeof v === "string") { localStorage.setItem(k, v); n++; }
+        alert("Imported " + n + " saved records — reloading with your restored history.");
+        location.reload();
+      } catch (_) {
+        alert("That file doesn't look like a Crypto Signal Desk backup.");
+      }
+    };
+    reader.readAsText(f);
   });
   for (const b of document.querySelectorAll(".view-nav button"))
     b.addEventListener("click", () => switchView(b.dataset.view));

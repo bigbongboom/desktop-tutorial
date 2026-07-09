@@ -444,7 +444,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk. Defensive half-size and STRONG-only in chop, full size in trends. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, using leverage up to <strong>each market's real exchange maximum</strong> (read live from Hyperliquid — e.g. 40× BTC) while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -592,11 +592,18 @@
    Configuration
    ============================================================ */
 const ASSETS = [
-  { id: "BTC",  name: "Bitcoin",     binance: "BTCUSDT",  okx: "BTC-USDT",  hl: "BTC",  demoBase: 100000 },
-  { id: "ETH",  name: "Ethereum",    binance: "ETHUSDT",  okx: "ETH-USDT",  hl: "ETH",  demoBase: 3500 },
-  { id: "SOL",  name: "Solana",      binance: "SOLUSDT",  okx: "SOL-USDT",  hl: "SOL",  demoBase: 160 },
-  { id: "HYPE", name: "Hyperliquid", binance: "HYPEUSDT", okx: "HYPE-USDT", hl: "HYPE", demoBase: 40 },
+  { id: "BTC",  name: "Bitcoin",     binance: "BTCUSDT",  okx: "BTC-USDT",  hl: "BTC",  maxLev: 40 },
+  { id: "ETH",  name: "Ethereum",    binance: "ETHUSDT",  okx: "ETH-USDT",  hl: "ETH",  maxLev: 25 },
+  { id: "SOL",  name: "Solana",      binance: "SOLUSDT",  okx: "SOL-USDT",  hl: "SOL",  maxLev: 20 },
+  { id: "HYPE", name: "Hyperliquid", binance: "HYPEUSDT", okx: "HYPE-USDT", hl: "HYPE", maxLev: 5 },
 ];
+/* Per-market maximum leverage: live from Hyperliquid's exchange metadata when
+   available, falling back to the static values above. */
+function maxLevFor(assetId) {
+  const a = ASSETS.find(x => x.id === assetId);
+  const ctx = state.pulse && state.pulse.ctx[a.hl];
+  return (ctx && isFinite(ctx.maxLev) && ctx.maxLev >= 1) ? ctx.maxLev : (a.maxLev || 5);
+}
 const TIMEFRAMES = {
   "1m":  { binance: "1m",  okx: "1m",  hl: "1m",  minutes: 1,    label: "1 min",  style: "scalp (very fast)" },
   "15m": { binance: "15m", okx: "15m", hl: "15m", minutes: 15,   label: "15 min", style: "scalp (intraday)" },
@@ -1219,7 +1226,7 @@ async function fetchPulse() {
     if (Array.isArray(j) && j.length === 2 && j[0] && Array.isArray(j[0].universe)) {
       j[0].universe.forEach((u, idx) => {
         const c = j[1][idx];
-        if (c) out.ctx[u.name] = { funding: parseFloat(c.funding), oi: parseFloat(c.openInterest), mark: parseFloat(c.markPx) };
+        if (c) out.ctx[u.name] = { funding: parseFloat(c.funding), oi: parseFloat(c.openInterest), mark: parseFloat(c.markPx), maxLev: parseFloat(u.maxLeverage) };
       });
     }
   } catch (_) {}
@@ -1313,7 +1320,7 @@ function recordTradeOutcome(pos) {
     lesson = "Stopped out" + (pos.conviction != null ? " at " + pos.conviction + "% conviction" : "") + " — this setup is now " +
              record + "; if it keeps losing it gets down-ranked automatically.";
   else if (pos.result === "liq")
-    lesson = "LIQUIDATED — leverage exceeded what the volatility allowed. Rule reinforced: leverage stays ≤5×, stops are never widened.";
+    lesson = "LIQUIDATED — leverage exceeded what the volatility allowed. Rule reinforced: size down before levering up, and never widen a stop.";
   else
     lesson = "Closed manually — record for this setup now " + record + ".";
   const j = loadJournal();
@@ -1322,6 +1329,23 @@ function recordTradeOutcome(pos) {
   saveJournal(j);
   bankAdd(pos.placedBy === "AI", pos.pnl);   // profits persist in the bank ledger forever
 }
+/* One-time sanitation: void (never settle) any open position that wasn't opened
+   against verified live prices, or whose entry is impossibly far from the live
+   price — corrupt entries must not touch the P&L ledgers or the journal. */
+function purgeLegacyPositions(results) {
+  const positions = loadPositions();
+  const isBad = (p) => {
+    if (p.status !== "open") return false;
+    if (!p.live) return true;   // pre-live-only versions could open trades on simulated prices
+    const res = results.find(r => r.asset.id === p.asset);
+    return !!(res && Math.abs(p.entry - res.an.price) / res.an.price > 0.5);
+  };
+  const bad = positions.filter(isBad);
+  if (!bad.length) return;
+  savePositions(positions.filter(p => !isBad(p)));
+  state.purgedNote = (state.purgedNote || 0) + bad.length;
+}
+
 /* Settle open positions against candle highs/lows since entry (stop counted first). */
 function settlePositions(results) {
   const positions = loadPositions();
@@ -1846,16 +1870,18 @@ function renderPlanActions(asset, plan) {
       return inp;
     };
     mkField("Size (" + asset.id + ")", t.qty, "any", v => { t.qty = v; });
-    const levLbl = el("label", "", "Leverage");
+    const mLev = maxLevFor(asset.id);
+    const levLbl = el("label", "", "Leverage (max " + mLev + "× on " + asset.id + ")");
     const levSel = el("select");
-    const LEVS = [1, 2, 3, 5, 10, 20, 40];
+    const LEVS = [1, 2, 3, 5, 10, 20, 40].filter(l => l <= mLev);
+    if (!LEVS.includes(mLev)) LEVS.push(mLev);
     for (const lv of LEVS) {
       const o = el("option", "", lv + "×" + (lv >= 20 ? " ⚠" : ""));
       o.value = String(lv);
       if (lv === t.lev) o.selected = true;
       levSel.appendChild(o);
     }
-    if (!LEVS.includes(t.lev)) levSel.value = "5";
+    if (!LEVS.includes(t.lev)) { levSel.value = String(Math.min(5, mLev)); t.lev = parseInt(levSel.value, 10); }
     levSel.addEventListener("change", () => { t.lev = parseInt(levSel.value, 10); t.dirty = true; update(); });
     levLbl.appendChild(levSel);
     fields.appendChild(levLbl);
@@ -1932,7 +1958,7 @@ function onPlaceTrade() {
     id: "p" + Date.now(), asset: lp.assetId, tf: lp.tf, dir: t.dir,
     entry: lp.plan.entry, stop: t.stop, target: t.target,
     qty: t.qty, lev: t.lev, liq: v.liq, riskAmt: v.riskAmt, stopDist: v.stopDist,
-    openedAt: Date.now(), status: "open", placedBy: "manual",
+    openedAt: Date.now(), status: "open", placedBy: "manual", live: true,
   });
   savePositions(positions);
   state.ticket = null;
@@ -2106,11 +2132,12 @@ function autoPilotExecute(decisions) {
     const riskPct = convictionRisk(d.conviction) * regimeMult;
     // capital committed scales with measured confidence: 3% → 15% of equity
     const investedCap = Math.min(equity * convictionInvest(d.conviction) * regimeMult, available);
+    const mLev = maxLevFor(d.asset.id);               // this market's real exchange maximum
     let qty = (equity * riskPct) / d.stopDist;
     let notional = qty * d.entry;
-    const maxNotional = investedCap * 5;              // the confidence-scaled margin at up to 5× — never beyond
+    const maxNotional = investedCap * mLev;           // confidence-scaled margin at up to the exchange max
     if (notional > maxNotional) { notional = maxNotional; qty = notional / d.entry; }
-    const lev = Math.max(1, Math.min(5, Math.ceil(notional / investedCap)));
+    const lev = Math.max(1, Math.min(mLev, Math.ceil(notional / investedCap)));
     const invested = notional / lev;
     investedSoFar += invested;
     positions.push({
@@ -2118,7 +2145,7 @@ function autoPilotExecute(decisions) {
       asset: d.asset.id, tf: d.tf, dir: d.dir, entry: d.entry, stop: d.stop, target: d.target,
       qty, lev, liq: liqPrice(d.entry, d.dir, lev), riskAmt: qty * d.stopDist, stopDist: d.stopDist,
       invested, conviction: d.conviction, riskPctUsed: riskPct, rationale: d.rationale,
-      openedAt: Date.now(), status: "open", placedBy: "AI",
+      openedAt: Date.now(), status: "open", placedBy: "AI", live: true,
     });
     openAssets.add(d.asset.id); openCount++; placed++;
     if (alertsEnabled()) {
@@ -2306,7 +2333,9 @@ function renderPositions(results) {
   };
 
   $("pfBadge").textContent = open.length ? String(open.length) : "";
-  $("pfUpdated").textContent = "Prices auto-refresh every 60 seconds · last update " + new Date().toLocaleTimeString() + ".";
+  $("pfUpdated").textContent = "Prices auto-refresh every 60 seconds · last update " + new Date().toLocaleTimeString() + "." +
+    (state.purgedNote ? " Removed " + state.purgedNote + " old position" + (state.purgedNote === 1 ? "" : "s") +
+      " opened against non-live prices — balances were not affected." : "");
 
   // account summary — your manual account and the AI's own $100 account, separately
   const isAi = (p) => p.placedBy === "AI";
@@ -2799,6 +2828,7 @@ async function refresh(hard) {
     state.lastPlan = { assetId: asset.id, tf: state.tf, plan, an };
     state.lastResults = results;
 
+    purgeLegacyPositions(results);
     settlePositions(results);
     notifySignals(results);
     renderOverview(results);

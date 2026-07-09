@@ -438,7 +438,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices, reads the regime (aggressive in strong trends, defensive half-size and STRONG-only in chop), and sizes by conviction — 1% of equity risked at 50% conviction up to 2% at 90%+, never more, always with a stop and a minimum 1:2 reward:risk. <strong>It learns:</strong> every closed trade is reviewed into the journal below, wins and losses update its per-setup memory, and that record feeds back into the rankings — setups that keep losing get down-ranked, earners get up-ranked. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk. Defensive half-size and STRONG-only in chop, full size in trends. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <p class="sub ai-status" id="aiStatus">Scanning…</p>
     <div class="table-wrap"><table id="aiTable">
@@ -616,6 +616,7 @@ const state = {
   justPlaced: null,           // asset id of a trade placed this session (for the confirmation note)
   editingId: null,            // position id currently being edited in the portfolio table
   lastLabels: {},             // last signal label per asset:tf (alert transition detection)
+  btCache: new Map(),         // whole-chart backtest per asset:tf (recomputed when a new candle closes)
 };
 
 /* Engine settings — every knob customizable, persisted, and honored by the
@@ -1996,7 +1997,7 @@ async function aiScanAndTrade() {
   const scans = await Promise.all(combos.map(async ({ a, tf }) => {
     try {
       const entry = await getCandles(a.id, tf, 150000);
-      return { asset: a, tf, an: analyze(entry.candles), source: entry.source };
+      return { asset: a, tf, an: analyze(entry.candles), source: entry.source, candles: entry.candles };
     } catch (_) { return null; }
   }));
   const valid = scans.filter(Boolean);
@@ -2028,6 +2029,29 @@ async function aiScanAndTrade() {
     const learn = learnAdjust(sc.asset.id, sc.tf, dir);
     rank += learn.adj;
 
+    // measured confidence — every term is computed from the chart, none invented:
+    // the engine is replayed over this chart's ENTIRE history (cached until a new
+    // candle closes) and its real win rate / expectancy there feeds the number.
+    const bKey = sc.asset.id + ":" + sc.tf;
+    const lastT = sc.candles[sc.candles.length - 1].t;
+    let cachedBt = state.btCache.get(bKey);
+    if (!cachedBt || cachedBt.lastT !== lastT) {
+      cachedBt = { lastT, bt: backtest(sc.candles) };
+      state.btCache.set(bKey, cachedBt);
+    }
+    const bt = cachedBt.bt;
+    const shrink = bt.stats.n / (bt.stats.n + 10);          // small samples count for less
+    const histPts = bt.stats.n ? clamp(clamp(bt.stats.avgR, -1, 1) * shrink * 30, -15, 15) : 0;
+    const sigPts = Math.min(Math.abs(sc.an.score), 70) * 0.35;
+    const alignPts = Math.min(agree, 3) * 5;
+    const regimePts = clamp(trendStrength, 0, 1.5) * 8;
+    const conviction = Math.round(clamp(25 + sigPts + histPts + alignPts + regimePts + learn.adj, 5, 95));
+    const convDetail = "confidence " + conviction + "% = base 25 + signal " + sigPts.toFixed(0) +
+      " + chart history " + (histPts >= 0 ? "+" : "") + histPts.toFixed(0) +
+      " (" + (bt.stats.n ? bt.stats.n + " replayed trades, " + bt.stats.winRate.toFixed(0) + "% win, " + (bt.stats.avgR >= 0 ? "+" : "") + bt.stats.avgR.toFixed(2) + "R avg over " + bt.barsTested + " bars" : "no replay sample") + ")" +
+      " + alignment " + alignPts + " + regime " + regimePts.toFixed(0) +
+      " + lessons " + (learn.adj >= 0 ? "+" : "") + learn.adj;
+
     const strong = Math.abs(sc.an.score) >= cfg.strongTh;
     const stopDist = cfg.stopMult * sc.an.atrNow;
     // enforce a minimum 1:2 reward:risk no matter the settings
@@ -2040,10 +2064,11 @@ async function aiScanAndTrade() {
     const rationale = sc.an.label + " (" + (sc.an.score > 0 ? "+" : "") + sc.an.score + ") · " +
       agree + " other TF" + (agree === 1 ? "" : "s") + " aligned · drivers: " + (drivers || "mixed") +
       " · regime: " + regime +
-      " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record");
+      " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
+      " · " + convDetail;
     decisions.push({
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
-      conviction: sc.an.conviction, rank, entry: sc.an.price,
+      conviction, rank, entry: sc.an.price,
       stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
       stopDist, regime, rationale, sim: sc.source === "Simulated",
     });
@@ -2068,8 +2093,10 @@ function aiAccountStats(results) {
   const invested = openAi.reduce((s, p) => s + (p.invested != null ? p.invested : (p.qty * p.entry) / (p.lev || 1)), 0);
   return { equity: AI_START + realized + unrealized, realized, unrealized, invested, openCount: openAi.length };
 }
-/* Conviction → risk: 1% of the AI's equity at 50% conviction, 2% at 90%+ (hard 1–2% band). */
-function convictionRisk(conviction) { return clamp(0.025 * (conviction || 50) - 0.25, 1, 2) / 100; }
+/* Confidence → risk: 1% of the AI's equity at 50% confidence, 2% at 95% (hard 1–2% band). */
+function convictionRisk(conviction) { return (1 + clamp(((conviction || 50) - 50) / 45, 0, 1)) / 100; }
+/* Confidence → capital deployed (margin): 3% of equity at 50% confidence up to 15% at 95%. */
+function convictionInvest(conviction) { return 0.03 + clamp(((conviction || 50) - 50) / 45, 0, 1) * 0.12; }
 
 function autoPilotExecute(decisions) {
   const cfg = state.cfg;
@@ -2089,12 +2116,15 @@ function autoPilotExecute(decisions) {
     if (d.regime === "chop" && Math.abs(d.score) < cfg.strongTh) continue;
     const available = equity - investedSoFar;         // free cash — the AI can't spend money it doesn't have
     if (available < 5) break;
-    const riskPct = convictionRisk(d.conviction) * (d.regime === "chop" ? 0.5 : d.regime === "mixed" ? 0.75 : 1);
+    const regimeMult = d.regime === "chop" ? 0.5 : d.regime === "mixed" ? 0.75 : 1;
+    const riskPct = convictionRisk(d.conviction) * regimeMult;
+    // capital committed scales with measured confidence: 3% → 15% of equity
+    const investedCap = Math.min(equity * convictionInvest(d.conviction) * regimeMult, available);
     let qty = (equity * riskPct) / d.stopDist;
     let notional = qty * d.entry;
-    const maxNotional = available * 5;                // free margin at up to 5× — never beyond
+    const maxNotional = investedCap * 5;              // the confidence-scaled margin at up to 5× — never beyond
     if (notional > maxNotional) { notional = maxNotional; qty = notional / d.entry; }
-    const lev = Math.max(1, Math.min(5, Math.ceil(notional / available)));
+    const lev = Math.max(1, Math.min(5, Math.ceil(notional / investedCap)));
     const invested = notional / lev;
     investedSoFar += invested;
     positions.push({
@@ -2108,8 +2138,9 @@ function autoPilotExecute(decisions) {
     if (alertsEnabled()) {
       try {
         new Notification("🤖 Autopilot: " + (d.dir > 0 ? "LONG " : "SHORT ") + d.asset.id + " · " + TIMEFRAMES[d.tf].label, {
-          body: "Invested " + fmtMoney(invested) + " of its " + fmtMoney(equity) + " (conviction " + d.conviction + "%, risk " +
-                (riskPct * 100).toFixed(1) + "%) · entry " + fmtUsd(d.entry) + " · stop " + fmtUsd(d.stop) + " · target " + fmtUsd(d.target),
+          body: "Invested " + fmtMoney(invested) + " (" + ((invested / Math.max(equity, 1)) * 100).toFixed(1) + "% of its " + fmtMoney(equity) +
+                ") at " + d.conviction + "% confidence · risk " + (riskPct * 100).toFixed(1) +
+                "% · entry " + fmtUsd(d.entry) + " · stop " + fmtUsd(d.stop) + " · target " + fmtUsd(d.target),
         });
       } catch (_) {}
     }
@@ -2315,7 +2346,7 @@ function renderPositions(results) {
     "started with " + fmtMoney(AI_START) + " · realized " + (ai.realized >= 0 ? "+" : "") + fmtMoney(ai.realized),
     ai.equity >= AI_START ? getCss("--status-good") : getCss("--status-critical"));
   addTile(sum, "🤖 AI invested now", fmtMoney(ai.invested),
-    ai.openCount + " position" + (ai.openCount === 1 ? "" : "s") + " · sized by conviction (1–2% risk)",
+    ai.openCount + " position" + (ai.openCount === 1 ? "" : "s") + " · 3–15% of capital per trade by confidence",
     null);
 
   // record stats

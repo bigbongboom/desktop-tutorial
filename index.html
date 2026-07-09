@@ -23,6 +23,8 @@
     --div-mid: #f0efec;
     --status-good: #0ca30c;       /* LONG */
     --status-critical: #d03b3b;   /* SHORT */
+    --candle-up: #1baf7a;
+    --candle-dn: #e34948;
     --delta-up: #006300;
     --delta-down: #b02a2a;
     --chip: #f0efec;
@@ -47,6 +49,8 @@
       --div-mid: #383835;
       --status-good: #0ca30c;
       --status-critical: #d03b3b;
+      --candle-up: #199e70;
+      --candle-dn: #e66767;
       --delta-up: #0ca30c;
       --delta-down: #e66767;
       --chip: #262624;
@@ -102,6 +106,8 @@
   }
   .tf-group button + button { border-left: 1px solid var(--border); }
   .tf-group button.active { background: var(--accent-soft); color: var(--text-primary); }
+  .tf-group.mini { margin-bottom: 10px; }
+  .tf-group.mini button { padding: 5px 11px; font-size: 11.5px; }
   .filters label { font-size: 12px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
   .filters input, .filters select {
     font: inherit; font-size: 12.5px; padding: 6px 9px; border-radius: 8px;
@@ -328,6 +334,7 @@
   <!-- one filter row, above everything it scopes -->
   <section class="filters" aria-label="Filters">
     <div class="tf-group" id="tfGroup" role="group" aria-label="Timeframe">
+      <button type="button" data-tf="1m">1m</button>
       <button type="button" data-tf="15m">15m</button>
       <button type="button" data-tf="1h" class="active">1h</button>
       <button type="button" data-tf="4h">4h</button>
@@ -433,8 +440,12 @@
 
   <!-- charts -->
   <section class="card chart-card">
-    <h2 id="priceTitle">Price</h2>
-    <p class="sub">Close with EMA 20 / 50 / 200 and a Bollinger(20, 2) band wash.</p>
+    <h2 id="priceTitle">Live trading view</h2>
+    <p class="sub">Candlesticks with the position overlay — green zone runs from entry to take-profit, red zone from entry to stop-loss, like a TradingView position tool. It shows your open paper trade when you have one, otherwise the engine's planned trade. Pick 1m above for scalping resolution.</p>
+    <div class="tf-group mini" id="styleGroup" role="group" aria-label="Chart style">
+      <button type="button" data-cs="candles" class="active">Candles</button>
+      <button type="button" data-cs="line">Line + indicators</button>
+    </div>
     <div class="legend" id="priceLegend"></div>
     <div id="priceChart"></div>
     <div class="tooltip" id="priceTip"></div>
@@ -541,6 +552,7 @@ const ASSETS = [
   { id: "HYPE", name: "Hyperliquid", binance: "HYPEUSDT", okx: "HYPE-USDT", hl: "HYPE", demoBase: 40 },
 ];
 const TIMEFRAMES = {
+  "1m":  { binance: "1m",  okx: "1m",  hl: "1m",  minutes: 1,    label: "1 min",  style: "scalp (very fast)" },
   "15m": { binance: "15m", okx: "15m", hl: "15m", minutes: 15,   label: "15 min", style: "scalp (intraday)" },
   "1h":  { binance: "1h",  okx: "1H",  hl: "1h",  minutes: 60,   label: "1 hour", style: "intraday swing"   },
   "4h":  { binance: "4h",  okx: "4H",  hl: "4h",  minutes: 240,  label: "4 hour", style: "multi-day swing"  },
@@ -577,6 +589,7 @@ function loadCfg() {
 }
 function saveCfg() { try { localStorage.setItem("csd_cfg", JSON.stringify(state.cfg)); } catch (_) {} }
 state.cfg = loadCfg();
+state.chartStyle = (() => { try { return localStorage.getItem("csd_style") === "line" ? "line" : "candles"; } catch (_) { return "candles"; } })();
 
 /* ============================================================
    Small utilities (all DOM text goes through textContent)
@@ -1260,6 +1273,11 @@ function renderChart(container, tooltipNode, cfg) {
   (cfg.series || []).forEach(s => scan(s.values));
   if (cfg.band) { scan(cfg.band.upper); scan(cfg.band.lower); }
   if (cfg.bars) scan(cfg.bars.values);
+  if (cfg.candlesData) for (const c of cfg.candlesData) if (c) { lo = Math.min(lo, c.l); hi = Math.max(hi, c.h); }
+  if (cfg.position) {
+    lo = Math.min(lo, cfg.position.stop, cfg.position.target, cfg.position.entry);
+    hi = Math.max(hi, cfg.position.stop, cfg.position.target, cfg.position.entry);
+  }
   (cfg.yRefs || []).forEach(rf => { lo = Math.min(lo, rf.v); hi = Math.max(hi, rf.v); });
   if (cfg.zeroLine) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
   if (cfg.yDomain) { lo = cfg.yDomain[0]; hi = cfg.yDomain[1]; }
@@ -1291,6 +1309,22 @@ function renderChart(container, tooltipNode, cfg) {
   }
   // baseline
   svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: padT + plotH, y2: padT + plotH, stroke: axisColor, "stroke-width": 1 }));
+
+  // position zones — the TradingView-style long/short overlay: a wash from
+  // entry to take-profit (good) and from entry to stop-loss (critical)
+  if (cfg.position) {
+    const p = cfg.position;
+    const x0 = x(clamp(p.fromIdx != null ? p.fromIdx : Math.round(n * 0.85), 0, n - 1));
+    const zw = padL + plotW - x0;
+    const zone = (a, b, color) => {
+      const top = Math.min(y(a), y(b)), zh = Math.abs(y(a) - y(b));
+      if (zh > 0.5 && zw > 0)
+        svg.appendChild(svgEl("rect", { x: x0.toFixed(1), y: top.toFixed(1), width: zw.toFixed(1), height: zh.toFixed(1), fill: color, "fill-opacity": 0.13 }));
+    };
+    zone(p.entry, p.target, getCss("--status-good"));
+    zone(p.entry, p.stop, getCss("--status-critical"));
+    svg.appendChild(svgEl("line", { x1: x0, x2: padL + plotW, y1: y(p.entry), y2: y(p.entry), stroke: getCss("--text-muted"), "stroke-width": 1.5 }));
+  }
 
   // reference lines (RSI 30/70, MACD zero, support/resistance, trade levels)
   for (const rf of cfg.yRefs || []) {
@@ -1343,6 +1377,22 @@ function renderChart(container, tooltipNode, cfg) {
     }
   }
 
+  // candlesticks — 1px wick, body colored by close vs open
+  if (cfg.candlesData) {
+    const up = getCss("--candle-up"), dn = getCss("--candle-dn");
+    const slot = plotW / n;
+    const bw = clamp(slot * 0.7, 1.2, 9);
+    for (let idx = 0; idx < n; idx++) {
+      const c = cfg.candlesData[idx];
+      if (!c) continue;
+      const col = c.c >= c.o ? up : dn;
+      svg.appendChild(svgEl("line", { x1: x(idx).toFixed(1), x2: x(idx).toFixed(1), y1: y(c.h).toFixed(1), y2: y(c.l).toFixed(1), stroke: col, "stroke-width": 1 }));
+      const top = Math.min(y(c.o), y(c.c));
+      const bh = Math.max(Math.abs(y(c.o) - y(c.c)), 1);
+      svg.appendChild(svgEl("rect", { x: (x(idx) - bw / 2).toFixed(1), y: top.toFixed(1), width: bw.toFixed(1), height: bh.toFixed(1), fill: col }));
+    }
+  }
+
   // line series (2px, round joins)
   for (const s of cfg.series || []) {
     let d = "", pen = false;
@@ -1357,12 +1407,16 @@ function renderChart(container, tooltipNode, cfg) {
     svg.appendChild(svgEl("path", attrs));
   }
 
-  // selective direct label: endpoint of the first series, with a surface-ringed end dot
-  if (cfg.endLabel && cfg.series && cfg.series.length) {
-    const s0 = cfg.series[0];
-    const vEnd = s0.values[n - 1];
+  // selective direct label: the last price (candle mode) or first series endpoint
+  {
+    let vEnd = null, endColor = null;
+    if (cfg.priceTag != null) { vEnd = cfg.priceTag; endColor = getCss("--series-1"); }
+    else if (cfg.endLabel && cfg.series && cfg.series.length && cfg.series[0].values[n - 1] != null) {
+      vEnd = cfg.series[0].values[n - 1];
+      endColor = cfg.series[0].color;
+    }
     if (vEnd != null) {
-      svg.appendChild(svgEl("circle", { cx: x(n - 1), cy: y(vEnd), r: 4.5, fill: s0.color, stroke: getCss("--surface-1"), "stroke-width": 2 }));
+      svg.appendChild(svgEl("circle", { cx: x(n - 1), cy: y(vEnd), r: 4.5, fill: endColor, stroke: getCss("--surface-1"), "stroke-width": 2 }));
       const lbl = svgEl("text", { x: padL + plotW + 6, y: clamp(y(vEnd) + 3.5, padT + 8, padT + plotH - 2), fill: getCss("--text-primary"), "font-size": 11, "font-weight": 700 });
       lbl.style.fontVariantNumeric = "tabular-nums";
       lbl.textContent = yFmt(vEnd);
@@ -1386,6 +1440,14 @@ function renderChart(container, tooltipNode, cfg) {
     clear(tooltipNode);
     tooltipNode.appendChild(el("div", "t-date", fmtTime(cfg.times[idx], cfg.tf)));
     const rows = [];
+    if (cfg.candlesData && cfg.candlesData[idx]) {
+      const c = cfg.candlesData[idx];
+      const cCol = c.c >= c.o ? getCss("--candle-up") : getCss("--candle-dn");
+      rows.push({ name: "Open", color: getCss("--text-muted"), val: yFmt(c.o) });
+      rows.push({ name: "High", color: getCss("--text-muted"), val: yFmt(c.h) });
+      rows.push({ name: "Low", color: getCss("--text-muted"), val: yFmt(c.l) });
+      rows.push({ name: "Close", color: cCol, val: yFmt(c.c) });
+    }
     for (const s of cfg.series || []) if (s.values[idx] != null) rows.push({ name: s.name, color: s.color, val: yFmt(s.values[idx]) });
     if (cfg.bars && cfg.bars.values[idx] != null)
       rows.push({ name: cfg.bars.name || "Histogram", color: cfg.bars.values[idx] >= 0 ? cfg.bars.posColor : cfg.bars.negColor, val: yFmt(cfg.bars.values[idx]) });
@@ -1470,10 +1532,12 @@ function renderOverview(results) {
 
     const closes = entry.candles.map(c => c.c);
     const barsPerDay = Math.max(1, Math.round(1440 / TIMEFRAMES[state.tf].minutes));
-    const ref = closes[closes.length - 1 - Math.min(barsPerDay, closes.length - 1)];
+    const span = Math.min(barsPerDay, closes.length - 1);
+    const ref = closes[closes.length - 1 - span];
     const chg = ((an.price - ref) / ref) * 100;
+    const covered = span * TIMEFRAMES[state.tf].minutes;
     const delta = el("span", "delta " + (chg >= 0 ? "up" : "down"),
-      (chg >= 0 ? "▲ +" : "▼ ") + chg.toFixed(2) + "% / 24h");
+      (chg >= 0 ? "▲ +" : "▼ ") + chg.toFixed(2) + "% / " + (covered >= 1380 ? "24h" : fmtDuration(covered)));
     card.appendChild(delta);
 
     card.appendChild(sparkline(closes.slice(-40), getCss("--series-1")));
@@ -1621,7 +1685,7 @@ function validateTicket(plan, t) {
   }
   const notional = t.qty * entry;
   const maxNotional = state.capital * t.lev;
-  if (notional > maxNotional + 1e-9)
+  if (notional > maxNotional * 1.005)   // small tolerance so the engine's own cap-rounded size never trips it
     errs.push("This size needs " + (notional / state.capital).toFixed(1) + "× your capital — raise the leverage or cut the size (max at " +
       t.lev + "×: " + fmtNum(maxNotional / entry, entry >= 1000 ? 4 : 2) + ").");
   const stopDist = Math.abs(entry - t.stop);
@@ -1750,6 +1814,7 @@ function onPlaceTrade() {
   state.justPlaced = lp.assetId;
   if (state.lastResults) renderPositions(state.lastResults);
   renderPlanActions(ASSETS.find(a => a.id === lp.assetId), lp.plan);
+  refresh(false);   // flip the chart overlay from plan-preview to the OPEN position immediately
 }
 /* ---------- signal alerts (browser notifications, tab must stay open) ---------- */
 function alertsEnabled() {
@@ -2102,9 +2167,13 @@ function renderCharts(asset, an, candles, levels, plan) {
   const times = win(candles.map(c => c.t));
   const closes = win(candles.map(c => c.c));
 
-  $("priceTitle").textContent = asset.name + " price — last " + SHOWN + " × " + TIMEFRAMES[state.tf].label + " bars";
+  const styleCandles = state.chartStyle !== "line";
+  $("priceTitle").textContent = (styleCandles ? "Live trading view — " : "Price — ") +
+    asset.name + " · last " + SHOWN + " × " + TIMEFRAMES[state.tf].label + " bars";
+  for (const b of document.querySelectorAll("#styleGroup button"))
+    b.classList.toggle("active", b.dataset.cs === (styleCandles ? "candles" : "line"));
 
-  // legend for the multi-series price chart
+  // legend
   const leg = $("priceLegend");
   clear(leg);
   const legItem = (name, color, rect) => {
@@ -2116,33 +2185,68 @@ function renderCharts(asset, an, candles, levels, plan) {
     it.appendChild(el("span", "", name));
     leg.appendChild(it);
   };
-  legItem("Close", getCss("--series-1"));
-  legItem("EMA 20", getCss("--series-2"));
-  legItem("EMA 50", getCss("--series-3"));
-  legItem("EMA 200", getCss("--series-4"));
-  legItem("Bollinger 20,2", getCss("--series-1"), true);
+  if (styleCandles) {
+    legItem("Up candle", getCss("--candle-up"), true);
+    legItem("Down candle", getCss("--candle-dn"), true);
+    legItem("EMA 20", getCss("--series-2"));
+    legItem("EMA 50", getCss("--series-3"));
+    legItem("TP zone", getCss("--status-good"), true);
+    legItem("SL zone", getCss("--status-critical"), true);
+  } else {
+    legItem("Close", getCss("--series-1"));
+    legItem("EMA 20", getCss("--series-2"));
+    legItem("EMA 50", getCss("--series-3"));
+    legItem("EMA 200", getCss("--series-4"));
+    legItem("Bollinger 20,2", getCss("--series-1"), true);
+  }
+
+  // the position overlay: your open paper trade wins; otherwise the engine's plan
+  const shownCandles = candles.slice(s);
+  const openPos = loadPositions().find(p => p.status === "open" && p.asset === asset.id);
+  let posCfg = null;
+  if (openPos) {
+    let fromIdx = times.findIndex(t => t >= openPos.openedAt);
+    if (fromIdx < 0) fromIdx = Math.max(0, times.length - 2);
+    posCfg = { entry: openPos.entry, stop: openPos.stop, target: openPos.target, dir: openPos.dir, fromIdx, open: true };
+  } else if (plan && plan.dir !== 0) {
+    posCfg = { entry: plan.entry, stop: plan.stop, target: plan.target, dir: plan.dir, fromIdx: Math.round(times.length * 0.86), open: false };
+  }
 
   const priceRefs = [];
   if (levels && levels.res != null) priceRefs.push({ v: levels.res, label: "Resistance " + fmtPrice(levels.res) });
   if (levels && levels.sup != null) priceRefs.push({ v: levels.sup, label: "Support " + fmtPrice(levels.sup) });
-  // where to enter, and where the trade lives: entry / stop / target on the chart itself
-  if (plan && plan.dir !== 0) {
-    const dirTxt = plan.dir > 0 ? "LONG" : "SHORT";
-    priceRefs.push({ v: plan.entry, label: "Enter " + dirTxt + " " + fmtPrice(plan.entry) });
-    priceRefs.push({ v: plan.stop, label: "Stop " + fmtPrice(plan.stop), color: getCss("--status-critical") });
-    priceRefs.push({ v: plan.target, label: "Target " + fmtPrice(plan.target), color: getCss("--status-good") });
+  if (posCfg) {
+    const pct = (v) => {
+      const d = ((v - posCfg.entry) / posCfg.entry) * 100;
+      return (d >= 0 ? "+" : "") + d.toFixed(2) + "%";
+    };
+    priceRefs.push({ v: posCfg.entry, label: (posCfg.open ? "OPEN " : "") + (posCfg.dir > 0 ? "LONG" : "SHORT") + " ENTRY " + fmtPrice(posCfg.entry) });
+    priceRefs.push({ v: posCfg.stop, label: "SL " + fmtPrice(posCfg.stop) + " (" + pct(posCfg.stop) + ")", color: getCss("--status-critical") });
+    priceRefs.push({ v: posCfg.target, label: "TP " + fmtPrice(posCfg.target) + " (" + pct(posCfg.target) + ")", color: getCss("--status-good") });
   }
 
-  renderChart($("priceChart"), $("priceTip"), {
-    times, tf: state.tf, height: 300, endLabel: true, yRefs: priceRefs,
-    band: { upper: win(an.bb.upper), lower: win(an.bb.lower), color: getCss("--series-1") },
-    series: [
-      { name: "Close",  color: getCss("--series-1"), values: closes },
-      { name: "EMA 20",  color: getCss("--series-2"), values: win(an.e20) },
-      { name: "EMA 50",  color: getCss("--series-3"), values: win(an.e50) },
-      { name: "EMA 200", color: getCss("--series-4"), values: win(an.e200) },
-    ],
-  });
+  if (styleCandles) {
+    renderChart($("priceChart"), $("priceTip"), {
+      times, tf: state.tf, height: 320, yRefs: priceRefs, position: posCfg,
+      candlesData: shownCandles,
+      priceTag: shownCandles.length ? shownCandles[shownCandles.length - 1].c : null,
+      series: [
+        { name: "EMA 20", color: getCss("--series-2"), values: win(an.e20) },
+        { name: "EMA 50", color: getCss("--series-3"), values: win(an.e50) },
+      ],
+    });
+  } else {
+    renderChart($("priceChart"), $("priceTip"), {
+      times, tf: state.tf, height: 300, endLabel: true, yRefs: priceRefs, position: posCfg,
+      band: { upper: win(an.bb.upper), lower: win(an.bb.lower), color: getCss("--series-1") },
+      series: [
+        { name: "Close",  color: getCss("--series-1"), values: closes },
+        { name: "EMA 20",  color: getCss("--series-2"), values: win(an.e20) },
+        { name: "EMA 50",  color: getCss("--series-3"), values: win(an.e50) },
+        { name: "EMA 200", color: getCss("--series-4"), values: win(an.e200) },
+      ],
+    });
+  }
 
   renderChart($("rsiChart"), $("rsiTip"), {
     times, tf: state.tf, height: 170, yDomain: [0, 100],
@@ -2326,6 +2430,13 @@ function wireControls() {
   });
   for (const b of document.querySelectorAll(".view-nav button"))
     b.addEventListener("click", () => switchView(b.dataset.view));
+  $("styleGroup").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-cs]");
+    if (!b) return;
+    state.chartStyle = b.dataset.cs;
+    try { localStorage.setItem("csd_style", state.chartStyle); } catch (_) {}
+    refresh(false);
+  });
 
   // engine settings — sync UI from persisted config, save + recompute on change
   const cfgFields = { cfgTrigger: "trigger", cfgEnter: "enterTh", cfgStrong: "strongTh", cfgStop: "stopMult", cfgTgt: "tgtMult" };

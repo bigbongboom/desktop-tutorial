@@ -286,6 +286,11 @@
   .pos-chip.win { background: rgba(12,163,12,0.12); color: var(--status-good); }
   .pos-chip.loss { background: rgba(208,59,59,0.12); color: var(--status-critical); }
   .pos-chip.open { background: var(--accent-soft); color: var(--series-1); }
+  .pnl-sub { display: block; font-size: 10.5px; color: var(--text-muted); font-weight: 600; }
+  tr.row-profit td { background: rgba(12,163,12,0.06); }
+  tr.row-loss td { background: rgba(208,59,59,0.06); }
+  tr.row-profit td:first-child { box-shadow: inset 3px 0 0 var(--status-good); }
+  tr.row-loss td:first-child { box-shadow: inset 3px 0 0 var(--status-critical); }
   td .mini-btn {
     font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
     padding: 3px 9px; border-radius: 7px; border: 1px solid var(--border);
@@ -713,6 +718,10 @@ function simulated(asset, tf) {
     out.push({ t: t0 + i * stepMs, o, h, l, c, v: asset.demoBase * 30 * (0.5 + rng()) });
     price = c;
   }
+  // anchor the final price to the asset's base so every timeframe agrees on
+  // the "current" simulated price (as live feeds naturally would)
+  const f = asset.demoBase / out[out.length - 1].c;
+  for (const c of out) { c.o *= f; c.h *= f; c.l *= f; c.c *= f; }
   return out;
 }
 
@@ -2114,6 +2123,11 @@ function renderPositions(results) {
     equity >= state.capital ? getCss("--status-good") : getCss("--status-critical"));
   addTile(sum, "Unrealized P&L", (unrealized >= 0 ? "+" : "") + fmtMoney(unrealized), open.length + " open position" + (open.length === 1 ? "" : "s"),
     open.length ? (unrealized >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
+  const winningOpen = open.filter(p => p.dir * (curPrice(p) - p.entry) >= 0).length;
+  const losingOpen = open.length - winningOpen;
+  addTile(sum, "Open right now", open.length ? "▲ " + winningOpen + " · ▼ " + losingOpen : "—",
+    open.length ? winningOpen + " in profit, " + losingOpen + " in loss" : "no open positions",
+    open.length ? (winningOpen >= losingOpen ? getCss("--status-good") : getCss("--status-critical")) : null);
   addTile(sum, "Realized P&L", (realized >= 0 ? "+" : "") + fmtMoney(realized), closed.length + " closed trade" + (closed.length === 1 ? "" : "s"),
     closed.length ? (realized >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
 
@@ -2146,6 +2160,7 @@ function renderPositions(results) {
     const pnl = isOpen ? p.dir * (cur - p.entry) * p.qty : p.pnl;
     const r = isOpen ? (p.stopDist > 0 ? p.dir * (cur - p.entry) / p.stopDist : 0) : p.r;
     const tr = el("tr");
+    if (isOpen) tr.className = pnl >= 0 ? "row-profit" : "row-loss";
     tr.appendChild(el("td", "", (p.placedBy === "AI" ? "🤖 " : "") + p.asset + " · " + p.tf));
     const side = el("td");
     const sc = el("span", "verdict-cell " + (p.dir > 0 ? "bull" : "bear"));
@@ -2174,14 +2189,22 @@ function renderPositions(results) {
 
     tr.appendChild(el("td", "num", fmtNum(p.qty, p.entry >= 1000 ? 4 : 2) + (p.lev ? " · " + p.lev + "×" : "")));
     tr.appendChild(el("td", "num", fmtPrice(isOpen ? cur : p.exit)));
-    const pnlTd = el("td", "num", (pnl >= 0 ? "+" : "") + fmtMoney(pnl));
-    pnlTd.style.color = pnl >= 0 ? getCss("--delta-up") : getCss("--delta-down");
-    pnlTd.style.fontWeight = "650";
+    const pnlTd = el("td", "num");
+    const pnlMain = el("span", "", (pnl >= 0 ? "+" : "") + fmtMoney(pnl));
+    pnlMain.style.color = pnl >= 0 ? getCss("--delta-up") : getCss("--delta-down");
+    pnlMain.style.fontWeight = "650";
+    pnlTd.appendChild(pnlMain);
+    const margin = (p.qty * p.entry) / (p.lev || 1);
+    if (margin > 0) {
+      const roe = (pnl / margin) * 100;
+      pnlTd.appendChild(el("span", "pnl-sub", (roe >= 0 ? "+" : "") + roe.toFixed(1) + "% on margin"));
+    }
     tr.appendChild(pnlTd);
     tr.appendChild(el("td", "num", (r >= 0 ? "+" : "") + r.toFixed(2)));
     const stTd = el("td");
-    const chip = el("span", "pos-chip " + (isOpen ? "open" : (p.pnl > 0 ? "win" : "loss")),
-      isOpen ? "OPEN" : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : p.result === "liq" ? "LIQUIDATED" : "CLOSED");
+    const chip = el("span", "pos-chip " + (isOpen ? (pnl >= 0 ? "win" : "loss") : (p.pnl > 0 ? "win" : "loss")),
+      isOpen ? (pnl >= 0 ? "OPEN ▲ PROFIT" : "OPEN ▼ LOSS")
+             : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : p.result === "liq" ? "LIQUIDATED" : "CLOSED");
     stTd.appendChild(chip);
     tr.appendChild(stTd);
 

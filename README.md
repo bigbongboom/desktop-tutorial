@@ -23,6 +23,14 @@ One file, zero dependencies — open `index.html` in any browser.
 - **Backtester** — replays the exact engine bar-by-bar with zero lookahead (entries on
   the next bar's open, stop counted before target): win rate, profit factor, expectancy,
   max drawdown, equity curve, and a per-timeframe comparison vs buy & hold.
+- **Auto-Trader AI** — sweeps all 4 markets × 5 timeframes every refresh, ranks setups
+  by signal strength, timeframe agreement and crowd positioning, and lists its long/short
+  decisions. An Autopilot switch lets it place the top calls in the paper account
+  automatically (one per market, three max, risk-budget sized, ≤5×). Deterministic and
+  backtestable — not a black box — and paper-only by design.
+- **Leverage up to 40×** on manual tickets, with honest liquidation math: an estimated
+  liquidation price on the ticket and chart, escalating warnings, and paper positions
+  that actually liquidate when price crosses it.
 - **Paper trading with an editable trade ticket** — customize size, leverage (1–10×,
   with risk warnings), stop and target before placing, with live notional/margin/risk
   math and validation. Stops/targets settle against candle highs/lows; no exchange keys

@@ -231,6 +231,13 @@
   .settings-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
   .ai-toggle { font-size: 13px; display: flex; gap: 8px; align-items: center; color: var(--text-primary); cursor: pointer; }
   .ai-status { margin: 8px 0 12px; }
+  .journal-title { font-size: 12px; font-weight: 700; color: var(--text-primary); margin-top: 6px; }
+  .journal-item { font-size: 12px; color: var(--text-secondary); padding: 7px 0; border-bottom: 1px solid var(--grid); line-height: 1.5; }
+  .journal-item:last-child { border-bottom: none; }
+  .journal-when { color: var(--text-muted); font-weight: 600; margin-right: 6px; }
+  .journal-r { font-weight: 700; }
+  .journal-r.win { color: var(--status-good); }
+  .journal-r.loss { color: var(--status-critical); }
 
   /* ---------- view navigation ---------- */
   .view-nav { display: flex; gap: 8px; margin: 0 0 16px; }
@@ -431,7 +438,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">On every refresh the engine sweeps all 4 markets × 5 timeframes, scores each chart, and ranks the setups by signal strength, timeframe agreement and crowd positioning. Flip on Autopilot and it places the top calls in your paper account automatically — one position per market, three max, sized at your risk budget. It's the same deterministic, backtestable engine applied everywhere at once — not a black box — and it only ever trades paper: no web page should be trusted with real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices, reads the regime (aggressive in strong trends, defensive half-size and STRONG-only in chop), and sizes by conviction — 1% of equity risked at 50% conviction up to 2% at 90%+, never more, always with a stop and a minimum 1:2 reward:risk. <strong>It learns:</strong> every closed trade is reviewed into the journal below, wins and losses update its per-setup memory, and that record feeds back into the rankings — setups that keep losing get down-ranked, earners get up-ranked. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <p class="sub ai-status" id="aiStatus">Scanning…</p>
     <div class="table-wrap"><table id="aiTable">
@@ -441,6 +448,9 @@
       </tr></thead>
       <tbody></tbody>
     </table></div>
+    <p class="sub" id="aiPerf" style="margin-top:12px;"></p>
+    <p class="journal-title">Journal — every trade reviewed, lessons fed back into the rankings</p>
+    <div id="aiJournal"></div>
   </section>
 
   <!-- market pulse -->
@@ -1238,6 +1248,58 @@ function closePosition(pos, exit, result, at) {
   pos.status = "closed"; pos.exit = exit; pos.result = result; pos.closedAt = at || Date.now();
   pos.pnl = pos.dir * (exit - pos.entry) * pos.qty;
   pos.r = pos.stopDist > 0 ? pos.dir * (exit - pos.entry) / pos.stopDist : 0;
+  recordTradeOutcome(pos);
+}
+
+/* ---------- trade journal + per-setup learning memory ---------- */
+function agoTxt(ts) {
+  const mins = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+  if (mins < 1) return "just now";
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  if (d > 0) return d + " d " + h + " h ago";
+  if (h > 0) return h + " h " + m + " min ago";
+  return m + " min ago";
+}
+function loadJournal() {
+  try { const j = JSON.parse(localStorage.getItem("csd_journal") || "[]"); return Array.isArray(j) ? j : []; }
+  catch (_) { return []; }
+}
+function saveJournal(j) { try { localStorage.setItem("csd_journal", JSON.stringify(j.slice(-40))); } catch (_) {} }
+function loadLearn() { try { return JSON.parse(localStorage.getItem("csd_learn") || "{}") || {}; } catch (_) { return {}; } }
+function saveLearn(l) { try { localStorage.setItem("csd_learn", JSON.stringify(l)); } catch (_) {} }
+function learnKey(asset, tf, dir) { return asset + "|" + tf + "|" + (dir > 0 ? "L" : "S"); }
+/* Past record of this exact setup (asset + timeframe + direction) → rank adjustment. */
+function learnAdjust(asset, tf, dir) {
+  const s = loadLearn()[learnKey(asset, tf, dir)];
+  if (!s || s.n < 2) return { adj: 0, n: s ? s.n : 0, wins: s ? s.wins : 0, avgR: 0 };
+  const avgR = s.sumR / s.n;
+  let adj = clamp(avgR * 5, -10, 8);
+  if (s.n >= 3 && s.wins / s.n < 0.35) adj -= 6;   // chronic loser: extra penalty
+  return { adj: Math.round(adj), n: s.n, wins: s.wins, avgR };
+}
+function recordTradeOutcome(pos) {
+  const learn = loadLearn();
+  const k = learnKey(pos.asset, pos.tf, pos.dir);
+  const s = learn[k] || { n: 0, wins: 0, sumR: 0 };
+  s.n++; if (pos.pnl > 0) s.wins++; s.sumR += isFinite(pos.r) ? pos.r : 0;
+  learn[k] = s;
+  saveLearn(learn);
+  const side = pos.dir > 0 ? "LONG" : "SHORT";
+  const record = s.wins + "W/" + (s.n - s.wins) + "L";
+  let lesson;
+  if (pos.result === "tp")
+    lesson = "Winner — " + pos.asset + " " + pos.tf + " " + side + " setups are earning (" + record + "); the engine up-ranks this pattern.";
+  else if (pos.result === "sl")
+    lesson = "Stopped out" + (pos.conviction != null ? " at " + pos.conviction + "% conviction" : "") + " — this setup is now " +
+             record + "; if it keeps losing it gets down-ranked automatically.";
+  else if (pos.result === "liq")
+    lesson = "LIQUIDATED — leverage exceeded what the volatility allowed. Rule reinforced: leverage stays ≤5×, stops are never widened.";
+  else
+    lesson = "Closed manually — record for this setup now " + record + ".";
+  const j = loadJournal();
+  j.push({ t: pos.closedAt || Date.now(), asset: pos.asset, tf: pos.tf, dir: pos.dir,
+           result: pos.result, r: pos.r, pnl: pos.pnl, by: pos.placedBy || "manual", lesson });
+  saveJournal(j);
 }
 /* Settle open positions against candle highs/lows since entry (stop counted first). */
 function settlePositions(results) {
@@ -1920,14 +1982,35 @@ async function aiScanAndTrade() {
       if (apr > 25) rank += dir > 0 ? -6 : 4;        // crowded longs: fade fresh longs
       else if (apr < -25) rank += dir > 0 ? 4 : -6;  // crowded shorts: squeeze fuel
     }
+    // regime read: EMA spread vs ATR — trending markets get sized up, chop gets defense
+    const li = sc.an.e20.length - 1;
+    const trendStrength = (sc.an.e20[li] != null && sc.an.e50[li] != null && sc.an.atrNow > 0)
+      ? Math.abs(sc.an.e20[li] - sc.an.e50[li]) / sc.an.atrNow : 0;
+    const regime = trendStrength >= 1 ? "trend" : trendStrength >= 0.5 ? "mixed" : "chop";
+    rank += regime === "trend" ? 4 : regime === "chop" ? -4 : 0;
+
+    // learning memory: this exact setup's past record adjusts its rank
+    const learn = learnAdjust(sc.asset.id, sc.tf, dir);
+    rank += learn.adj;
+
     const strong = Math.abs(sc.an.score) >= cfg.strongTh;
     const stopDist = cfg.stopMult * sc.an.atrNow;
-    const tgtDist = (strong ? cfg.tgtMult + 1 : cfg.tgtMult) * sc.an.atrNow;
+    // enforce a minimum 1:2 reward:risk no matter the settings
+    const tgtMult = Math.max(strong ? cfg.tgtMult + 1 : cfg.tgtMult, 2 * cfg.stopMult);
+    const tgtDist = tgtMult * sc.an.atrNow;
+    const drivers = sc.an.comps
+      .filter(c => Math.sign(c.pts) === dir)
+      .sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts))
+      .slice(0, 2).map(c => c.name).join(", ");
+    const rationale = sc.an.label + " (" + (sc.an.score > 0 ? "+" : "") + sc.an.score + ") · " +
+      agree + " other TF" + (agree === 1 ? "" : "s") + " aligned · drivers: " + (drivers || "mixed") +
+      " · regime: " + regime +
+      " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record");
     decisions.push({
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction: sc.an.conviction, rank, entry: sc.an.price,
       stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
-      stopDist, sim: sc.source === "Simulated",
+      stopDist, regime, rationale, sim: sc.source === "Simulated",
     });
   }
   decisions.sort((a, b) => b.rank - a.rank);
@@ -1937,32 +2020,62 @@ async function aiScanAndTrade() {
   renderAiBoard();
 }
 
+const AI_START = 100;   // the AI's own bankroll, separate from your account
+function aiAccountStats(results) {
+  const positions = loadPositions();
+  const ai = positions.filter(p => p.placedBy === "AI");
+  const cur = (p) => {
+    const r = results && results.find(x => x.asset.id === p.asset);
+    return r ? r.an.price : p.entry;
+  };
+  const realized = ai.filter(p => p.status === "closed").reduce((s, p) => s + p.pnl, 0);
+  const openAi = ai.filter(p => p.status === "open");
+  const unrealized = openAi.reduce((s, p) => s + p.dir * (cur(p) - p.entry) * p.qty, 0);
+  const invested = openAi.reduce((s, p) => s + (p.invested != null ? p.invested : (p.qty * p.entry) / (p.lev || 1)), 0);
+  return { equity: AI_START + realized + unrealized, realized, unrealized, invested, openCount: openAi.length };
+}
+/* Conviction → risk: 1% of the AI's equity at 50% conviction, 2% at 90%+ (hard 1–2% band). */
+function convictionRisk(conviction) { return clamp(0.025 * (conviction || 50) - 0.25, 1, 2) / 100; }
+
 function autoPilotExecute(decisions) {
   const cfg = state.cfg;
   const meets = (d) => cfg.trigger === "strong" ? Math.abs(d.score) >= cfg.strongTh : true;
   const positions = loadPositions();
   const openAssets = new Set(positions.filter(p => p.status === "open").map(p => p.asset));
   let openCount = openAssets.size, placed = 0;
+  const stats = aiAccountStats(state.lastResults);
+  const equity = stats.equity;
+  let investedSoFar = stats.invested;                 // margin already committed to open trades
+  state.aiBusted = equity < 10;
+  if (state.aiBusted) return;                         // account depleted — no new trades
   for (const d of decisions || []) {
     if (openCount >= 3) break;                        // hard cap: three simultaneous positions
     if (!meets(d) || openAssets.has(d.asset.id) || !(d.stopDist > 0)) continue;
-    let qty = (state.capital * state.riskPct) / d.stopDist;
+    // defensive in chop: only STRONG signals qualify, and size is halved
+    if (d.regime === "chop" && Math.abs(d.score) < cfg.strongTh) continue;
+    const available = equity - investedSoFar;         // free cash — the AI can't spend money it doesn't have
+    if (available < 5) break;
+    const riskPct = convictionRisk(d.conviction) * (d.regime === "chop" ? 0.5 : d.regime === "mixed" ? 0.75 : 1);
+    let qty = (equity * riskPct) / d.stopDist;
     let notional = qty * d.entry;
-    const maxNotional = state.capital * 5;            // autopilot never exceeds 5×
-    if (notional > maxNotional) { qty = maxNotional / d.entry; notional = maxNotional; }
-    const lev = Math.max(1, Math.min(5, Math.ceil(notional / Math.max(state.capital, 1))));
+    const maxNotional = available * 5;                // free margin at up to 5× — never beyond
+    if (notional > maxNotional) { notional = maxNotional; qty = notional / d.entry; }
+    const lev = Math.max(1, Math.min(5, Math.ceil(notional / available)));
+    const invested = notional / lev;
+    investedSoFar += invested;
     positions.push({
       id: "p" + Date.now() + Math.random().toString(36).slice(2, 6),
       asset: d.asset.id, tf: d.tf, dir: d.dir, entry: d.entry, stop: d.stop, target: d.target,
       qty, lev, liq: liqPrice(d.entry, d.dir, lev), riskAmt: qty * d.stopDist, stopDist: d.stopDist,
+      invested, conviction: d.conviction, riskPctUsed: riskPct, rationale: d.rationale,
       openedAt: Date.now(), status: "open", placedBy: "AI",
     });
     openAssets.add(d.asset.id); openCount++; placed++;
     if (alertsEnabled()) {
       try {
         new Notification("🤖 Autopilot: " + (d.dir > 0 ? "LONG " : "SHORT ") + d.asset.id + " · " + TIMEFRAMES[d.tf].label, {
-          body: "Entry " + fmtUsd(d.entry) + " · stop " + fmtUsd(d.stop) + " · target " + fmtUsd(d.target) +
-                " · score " + (d.score > 0 ? "+" : "") + d.score,
+          body: "Invested " + fmtMoney(invested) + " of its " + fmtMoney(equity) + " (conviction " + d.conviction + "%, risk " +
+                (riskPct * 100).toFixed(1) + "%) · entry " + fmtUsd(d.entry) + " · stop " + fmtUsd(d.stop) + " · target " + fmtUsd(d.target),
         });
       } catch (_) {}
     }
@@ -1979,12 +2092,43 @@ function renderAiBoard() {
   clear(tbody);
   const ds = state.lastDecisions || [];
   const anySim = ds.some(d => d.sim);
+  const ai = aiAccountStats(state.lastResults);
   $("aiStatus").textContent =
     "Scanned " + (state.scannedCount || 0) + " charts across " + ASSETS.length + " markets · " +
     (ds.length
       ? "top call: " + ds[0].asset.id + " " + TIMEFRAMES[ds[0].tf].label + " " + ds[0].label + " (" + (ds[0].score > 0 ? "+" : "") + ds[0].score + ")"
       : "no setups clear your threshold — waiting is the decision") +
-    (anySim ? " · SIMULATED data" : "") + " · Autopilot " + (state.autoPilot ? "ON (paper)" : "off");
+    (anySim ? " · SIMULATED data" : "") + " · Autopilot " + (state.autoPilot ? "ON (paper)" : "off") +
+    " · AI account " + fmtMoney(ai.equity) + " (started " + fmtMoney(AI_START) + ", " + fmtMoney(ai.invested) + " invested)" +
+    (ai.equity < 10 ? " — DEPLETED: use 'Clear closed trades' in the Portfolio to restart it at $100" : "");
+
+  // running performance log + journal
+  const aiClosed = loadPositions().filter(p => p.placedBy === "AI" && p.status === "closed");
+  const aiWins = aiClosed.filter(p => p.pnl > 0).length;
+  const netR = aiClosed.reduce((s, p) => s + (isFinite(p.r) ? p.r : 0), 0);
+  const netPnl = aiClosed.reduce((s, p) => s + p.pnl, 0);
+  $("aiPerf").textContent = "Performance log: " + aiClosed.length + " closed AI trade" + (aiClosed.length === 1 ? "" : "s") +
+    " · win rate " + (aiClosed.length ? Math.round((aiWins / aiClosed.length) * 100) + "%" : "—") +
+    " · realized " + (netPnl >= 0 ? "+" : "") + fmtMoney(netPnl) + " (" + (netR >= 0 ? "+" : "") + netR.toFixed(2) + "R)" +
+    " · portfolio value " + fmtMoney(ai.equity) + " from a $100.00 base.";
+  const jbox = $("aiJournal");
+  clear(jbox);
+  const entries = loadJournal().slice(-6).reverse();
+  if (!entries.length) {
+    jbox.appendChild(el("p", "empty-note", "No closed trades yet — the journal writes itself after every win or loss, and each lesson feeds back into the rankings above."));
+  } else {
+    for (const e of entries) {
+      const item = el("div", "journal-item");
+      item.appendChild(el("span", "journal-when", agoTxt(e.t)));
+      item.appendChild(document.createTextNode((e.by === "AI" ? "🤖 " : "👤 ") + e.asset + " " + e.tf + " " + (e.dir > 0 ? "LONG" : "SHORT") + " · "));
+      const rSpan = el("span", "journal-r " + (e.pnl > 0 ? "win" : "loss"),
+        (e.result === "tp" ? "TARGET HIT " : e.result === "sl" ? "STOPPED " : e.result === "liq" ? "LIQUIDATED " : "CLOSED ") +
+        (e.r >= 0 ? "+" : "") + (isFinite(e.r) ? e.r.toFixed(2) : "0.00") + "R");
+      item.appendChild(rSpan);
+      item.appendChild(document.createTextNode(" — " + e.lesson));
+      jbox.appendChild(item);
+    }
+  }
   if (!ds.length) {
     const tr = el("tr");
     const td = el("td", "empty-note", "Nothing qualifies under your Engine settings right now. The AI re-scans every 60 seconds.");
@@ -1995,6 +2139,7 @@ function renderAiBoard() {
   }
   ds.forEach((d, i) => {
     const tr = el("tr");
+    if (d.rationale) tr.title = d.rationale;   // hover any row for the full reasoning
     tr.appendChild(el("td", "num", String(i + 1)));
     tr.appendChild(el("td", "", d.asset.id + "/USD"));
     tr.appendChild(el("td", "", TIMEFRAMES[d.tf].label));
@@ -2113,23 +2258,32 @@ function renderPositions(results) {
   $("pfBadge").textContent = open.length ? String(open.length) : "";
   $("pfUpdated").textContent = "Prices auto-refresh every 60 seconds · last update " + new Date().toLocaleTimeString() + ".";
 
-  // account summary
-  const realized = closed.reduce((s, p) => s + p.pnl, 0);
-  const unrealized = open.reduce((s, p) => s + p.dir * (curPrice(p) - p.entry) * p.qty, 0);
-  const equity = state.capital + realized + unrealized;
+  // account summary — your manual account and the AI's own $100 account, separately
+  const isAi = (p) => p.placedBy === "AI";
+  const mClosed = closed.filter(p => !isAi(p)), mOpen = open.filter(p => !isAi(p));
+  const mRealized = mClosed.reduce((s, p) => s + p.pnl, 0);
+  const mUnrealized = mOpen.reduce((s, p) => s + p.dir * (curPrice(p) - p.entry) * p.qty, 0);
+  const mEquity = state.capital + mRealized + mUnrealized;
+  const ai = aiAccountStats(results);
   const sum = $("pfSummary");
   clear(sum);
-  addTile(sum, "Paper equity", fmtMoney(equity), "capital " + fmtMoney(state.capital) + " + results",
-    equity >= state.capital ? getCss("--status-good") : getCss("--status-critical"));
-  addTile(sum, "Unrealized P&L", (unrealized >= 0 ? "+" : "") + fmtMoney(unrealized), open.length + " open position" + (open.length === 1 ? "" : "s"),
-    open.length ? (unrealized >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
+  addTile(sum, "Your account", fmtMoney(mEquity),
+    "manual trades · capital " + fmtMoney(state.capital) + " · realized " + (mRealized >= 0 ? "+" : "") + fmtMoney(mRealized),
+    mEquity >= state.capital ? getCss("--status-good") : getCss("--status-critical"));
+  addTile(sum, "Your unrealized P&L", (mUnrealized >= 0 ? "+" : "") + fmtMoney(mUnrealized),
+    mOpen.length + " open manual position" + (mOpen.length === 1 ? "" : "s"),
+    mOpen.length ? (mUnrealized >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
   const winningOpen = open.filter(p => p.dir * (curPrice(p) - p.entry) >= 0).length;
   const losingOpen = open.length - winningOpen;
   addTile(sum, "Open right now", open.length ? "▲ " + winningOpen + " · ▼ " + losingOpen : "—",
-    open.length ? winningOpen + " in profit, " + losingOpen + " in loss" : "no open positions",
+    open.length ? winningOpen + " in profit, " + losingOpen + " in loss (all accounts)" : "no open positions",
     open.length ? (winningOpen >= losingOpen ? getCss("--status-good") : getCss("--status-critical")) : null);
-  addTile(sum, "Realized P&L", (realized >= 0 ? "+" : "") + fmtMoney(realized), closed.length + " closed trade" + (closed.length === 1 ? "" : "s"),
-    closed.length ? (realized >= 0 ? getCss("--status-good") : getCss("--status-critical")) : null);
+  addTile(sum, "🤖 AI account", fmtMoney(ai.equity),
+    "started with " + fmtMoney(AI_START) + " · realized " + (ai.realized >= 0 ? "+" : "") + fmtMoney(ai.realized),
+    ai.equity >= AI_START ? getCss("--status-good") : getCss("--status-critical"));
+  addTile(sum, "🤖 AI invested now", fmtMoney(ai.invested),
+    ai.openCount + " position" + (ai.openCount === 1 ? "" : "s") + " · sized by conviction (1–2% risk)",
+    null);
 
   // record stats
   const stats = $("paperStats");
@@ -2161,7 +2315,12 @@ function renderPositions(results) {
     const r = isOpen ? (p.stopDist > 0 ? p.dir * (cur - p.entry) / p.stopDist : 0) : p.r;
     const tr = el("tr");
     if (isOpen) tr.className = pnl >= 0 ? "row-profit" : "row-loss";
-    tr.appendChild(el("td", "", (p.placedBy === "AI" ? "🤖 " : "") + p.asset + " · " + p.tf));
+    const assetTd = el("td", "", (p.placedBy === "AI" ? "🤖 " : "") + p.asset + " · " + p.tf);
+    assetTd.appendChild(el("span", "pnl-sub",
+      isOpen ? "placed " + agoTxt(p.openedAt)
+             : "held " + fmtDuration(Math.max(1, ((p.closedAt || p.openedAt) - p.openedAt) / 60000))));
+    if (p.rationale) assetTd.title = p.rationale;
+    tr.appendChild(assetTd);
     const side = el("td");
     const sc = el("span", "verdict-cell " + (p.dir > 0 ? "bull" : "bear"));
     sc.appendChild(el("span", "dot"));
@@ -2187,7 +2346,12 @@ function renderPositions(results) {
       tr.appendChild(el("td", "num", fmtPrice(p.target)));
     }
 
-    tr.appendChild(el("td", "num", fmtNum(p.qty, p.entry >= 1000 ? 4 : 2) + (p.lev ? " · " + p.lev + "×" : "")));
+    const sizeTd = el("td", "num", fmtNum(p.qty, p.entry >= 1000 ? 4 : 2) + (p.lev ? " · " + p.lev + "×" : ""));
+    const marginVal = p.invested != null ? p.invested : (p.qty * p.entry) / (p.lev || 1);
+    sizeTd.appendChild(el("span", "pnl-sub",
+      (isAi(p) ? "invested " : "margin ") + fmtMoney(marginVal) +
+      (isAi(p) && p.conviction != null ? " · conv " + p.conviction + "%" : "")));
+    tr.appendChild(sizeTd);
     tr.appendChild(el("td", "num", fmtPrice(isOpen ? cur : p.exit)));
     const pnlTd = el("td", "num");
     const pnlMain = el("span", "", (pnl >= 0 ? "+" : "") + fmtMoney(pnl));
@@ -2225,6 +2389,7 @@ function renderPositions(results) {
           closePosition(mine, cur, "manual");
           savePositions(all);
           renderPositions(state.lastResults);
+          renderAiBoard();   // journal + performance log update immediately
           if (state.lastPlan) renderPlanActions(ASSETS.find(a => a.id === state.lastPlan.assetId), state.lastPlan.plan);
         }
       });
@@ -2623,6 +2788,7 @@ function wireControls() {
   $("clearHistory").addEventListener("click", () => {
     savePositions(loadPositions().filter(p => p.status === "open"));
     renderPositions(state.lastResults);
+    renderAiBoard();
   });
   for (const b of document.querySelectorAll(".view-nav button"))
     b.addEventListener("click", () => switchView(b.dataset.view));

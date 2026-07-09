@@ -5,9 +5,12 @@ One file, zero dependencies — open `index.html` in any browser.
 
 ## What it does
 
-- **Live market data** with automatic failover: Binance → OKX → Hyperliquid's native API
-  (HYPE uses Hyperliquid first). If every feed is unreachable it falls back to clearly
-  badged simulated data so the desk still demonstrates itself offline.
+- **Live market data only** with automatic failover: Binance → OKX → Hyperliquid's
+  native API (HYPE uses Hyperliquid first). If every feed is unreachable the desk
+  pauses honestly — last real prices marked stale, an offline banner, AI scanning
+  suspended — and resumes automatically on reconnection. It never shows simulated
+  numbers. A "Keep screen awake" toggle lets the bot run all day on one device, and
+  stops/targets are reconciled from real candle history whenever the tab wakes.
 - **Twelve-component signal engine** scored into one long/short number (−100…+100):
   trend structure (price vs EMA200, EMA20/50/200 alignment, EMA slope), momentum
   (RSI 14, MACD cross, MACD histogram momentum, 10-bar rate of change), mean reversion

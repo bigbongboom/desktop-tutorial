@@ -93,6 +93,7 @@
     padding: 9px 14px; margin: 10px 0 18px;
   }
   .risk-note strong { color: var(--text-primary); }
+  .offline-note { border-color: var(--status-critical); }
 
   /* ---------- filter row ---------- */
   .filters {
@@ -331,6 +332,11 @@
     <button class="refresh" id="refreshBtn" type="button">Refresh</button>
   </header>
 
+  <div class="risk-note offline-note hidden" id="offlineBanner">
+    <strong>Waiting for live prices…</strong> You appear to be offline or the exchange feeds are unreachable.
+    This desk never shows simulated numbers — everything is paused and will resume automatically the moment your connection returns.
+  </div>
+
   <p class="risk-note">
     <strong>How to read this desk:</strong> the engine scores fourteen technical signals (trend, momentum,
     mean-reversion, breakout, divergence, volume) into one long/short score per timeframe, then builds an ATR-based trade plan —
@@ -440,6 +446,8 @@
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
     <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk. Defensive half-size and STRONG-only in chop, full size in trends. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
+    <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
+    <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
     <p class="sub ai-status" id="aiStatus">Scanning…</p>
     <div class="table-wrap"><table id="aiTable">
       <thead><tr>
@@ -743,32 +751,8 @@ async function fromHyperliquid(asset, tf) {
   if (!Array.isArray(j) || j.length < 60) throw new Error("thin data");
   return j.map(r => ({ t: +r.t, o: +r.o, h: +r.h, l: +r.l, c: +r.c, v: +r.v }));
 }
-/* Deterministic simulated series so the desk still demonstrates itself offline. */
-function simulated(asset, tf) {
-  let seed = 0;
-  for (const ch of (asset.id + tf)) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
-  const rng = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
-  const stepMs = TIMEFRAMES[tf].minutes * 60_000;
-  const t0 = Date.now() - CANDLES * stepMs;
-  const vol = 0.006 * Math.sqrt(TIMEFRAMES[tf].minutes / 60);
-  let price = asset.demoBase, drift = 0;
-  const out = [];
-  for (let i = 0; i < CANDLES; i++) {
-    drift = drift * 0.97 + (rng() - 0.5) * vol * 0.6;
-    const ret = drift + (rng() - 0.5) * 2 * vol;
-    const o = price;
-    const c = Math.max(o * (1 + ret), asset.demoBase * 0.05);
-    const h = Math.max(o, c) * (1 + rng() * vol * 0.8);
-    const l = Math.min(o, c) * (1 - rng() * vol * 0.8);
-    out.push({ t: t0 + i * stepMs, o, h, l, c, v: asset.demoBase * 30 * (0.5 + rng()) });
-    price = c;
-  }
-  // anchor the final price to the asset's base so every timeframe agrees on
-  // the "current" simulated price (as live feeds naturally would)
-  const f = asset.demoBase / out[out.length - 1].c;
-  for (const c of out) { c.o *= f; c.h *= f; c.l *= f; c.c *= f; }
-  return out;
-}
+/* No simulated data, ever: if every live source is unreachable the desk shows
+   its last real prices (marked stale) or pauses outright until reconnection. */
 
 /* Consecutive-failure count per source: a source that keeps failing (geo-block,
    proxy reset) is tried last instead of costing a timeout on every request. */
@@ -801,9 +785,10 @@ async function getCandles(assetId, tf, maxAgeMs = REFRESH_MS - 2000) {
       sourceFails.set(name, failCount(name) + 1);
     }
   }
-  const entry = { candles: simulated(asset, tf), source: "Simulated", fetchedAt: Date.now() };
-  state.data.set(key, entry);
-  return entry;
+  // every source failed: return the last REAL data marked stale, or nothing —
+  // this desk never invents prices
+  if (cached) return { ...cached, stale: true };
+  return null;
 }
 
 /* ============================================================
@@ -1997,6 +1982,7 @@ async function aiScanAndTrade() {
   const scans = await Promise.all(combos.map(async ({ a, tf }) => {
     try {
       const entry = await getCandles(a.id, tf, 150000);
+      if (!entry || entry.stale) return null;   // the AI never analyzes or trades anything but fresh live prices
       return { asset: a, tf, an: analyze(entry.candles), source: entry.source, candles: entry.candles };
     } catch (_) { return null; }
   }));
@@ -2156,14 +2142,14 @@ function renderAiBoard() {
   const tbody = $("aiTable").querySelector("tbody");
   clear(tbody);
   const ds = state.lastDecisions || [];
-  const anySim = ds.some(d => d.sim);
   const ai = aiAccountStats(state.lastResults);
-  $("aiStatus").textContent =
-    "Scanned " + (state.scannedCount || 0) + " charts across " + ASSETS.length + " markets · " +
-    (ds.length
-      ? "top call: " + ds[0].asset.id + " " + TIMEFRAMES[ds[0].tf].label + " " + ds[0].label + " (" + (ds[0].score > 0 ? "+" : "") + ds[0].score + ")"
-      : "no setups clear your threshold — waiting is the decision") +
-    (anySim ? " · SIMULATED data" : "") + " · Autopilot " + (state.autoPilot ? "ON (paper)" : "off") +
+  $("aiStatus").textContent = (!state.scannedCount
+    ? "OFFLINE — scanning paused; the AI only trades fresh live prices and resumes the moment your connection returns"
+    : "Scanned " + state.scannedCount + " live charts across " + ASSETS.length + " markets · " +
+      (ds.length
+        ? "top call: " + ds[0].asset.id + " " + TIMEFRAMES[ds[0].tf].label + " " + ds[0].label + " (" + (ds[0].score > 0 ? "+" : "") + ds[0].score + ")"
+        : "no setups clear your threshold — waiting is the decision")) +
+    " · Autopilot " + (state.autoPilot ? "ON (paper)" : "off") +
     " · AI account " + fmtMoney(ai.equity) + " (started " + fmtMoney(AI_START) + ", " + fmtMoney(ai.invested) + " invested)" +
     (ai.equity < 10 ? " — DEPLETED: use 'Clear closed trades' in the Portfolio to restart it at $100" : "");
 
@@ -2504,7 +2490,14 @@ async function runBacktests() {
     const rows = [];
     for (const tf of Object.keys(TIMEFRAMES)) {
       const entry = await getCandles(state.asset, tf, 5 * 60 * 1000);
+      if (!entry) continue;   // offline — never backtest invented data
       rows.push({ tf, source: entry.source, bt: backtest(entry.candles) });
+    }
+    if (!rows.length) {
+      const box = $("btResults");
+      clear(box);
+      box.appendChild(el("p", "empty-note", "No live price history available right now — reconnect and run the backtest again. This desk never tests against simulated data."));
+      return;
     }
     renderBacktest(asset, rows);
   } finally {
@@ -2516,13 +2509,11 @@ function renderBacktest(asset, rows) {
   const box = $("btResults");
   clear(box);
   const selRow = rows.find(r => r.tf === state.tf) || rows[0];
-  const anySim = rows.some(r => r.source === "Simulated");
   box.appendChild(el("p", "sub",
     asset.name + " — engine replayed on " + selRow.bt.barsTested + " × " + TIMEFRAMES[selRow.tf].label +
-    " bars with your settings (trigger: " + (state.cfg.trigger === "strong" ? "STRONG only" : "all signals") +
+    " bars of live history with your settings (trigger: " + (state.cfg.trigger === "strong" ? "STRONG only" : "all signals") +
     ", entry ±" + (state.cfg.trigger === "strong" ? state.cfg.strongTh : state.cfg.enterTh) +
-    ", stop " + state.cfg.stopMult.toFixed(1) + "×ATR, target " + state.cfg.tgtMult.toFixed(1) + "×ATR)" +
-    (anySim ? " — SIMULATED data, a demo of the method, not real accuracy" : "") + "."));
+    ", stop " + state.cfg.stopMult.toFixed(1) + "×ATR, target " + state.cfg.tgtMult.toFixed(1) + "×ATR)."));
 
   const st = selRow.bt.stats;
   const tiles = el("div", "tiles");
@@ -2777,18 +2768,31 @@ async function refresh(hard) {
 
     // one parallel burst: all assets on the selected timeframe (overview)
     // plus the selected asset on every timeframe (consensus)
-    const [results, mtf] = await Promise.all([
+    const [resultsRaw, mtfRaw] = await Promise.all([
       Promise.all(ASSETS.map(async (asset) => {
         const entry = await getCandles(asset.id, state.tf);
-        return { asset, entry, an: analyze(entry.candles) };
+        return entry ? { asset, entry, an: analyze(entry.candles) } : null;
       })),
       Promise.all(Object.keys(TIMEFRAMES).map(async (tf) => {
         const entry = await getCandles(state.asset, tf);
-        return { tf, an: analyze(entry.candles) };
+        return entry ? { tf, an: analyze(entry.candles) } : null;
       })),
     ]);
+    const results = resultsRaw.filter(Boolean);
+    const mtf = mtfRaw.filter(Boolean);
 
+    // no live prices at all → pause honestly and wait for reconnection
     const sel = results.find(r => r.asset.id === state.asset);
+    if (!results.length || !sel) {
+      const badge = $("srcBadge");
+      badge.className = "src-badge demo";
+      $("srcText").textContent = "OFFLINE — waiting for live prices";
+      $("updated").textContent = "Paused " + new Date().toLocaleTimeString();
+      if (!state.lastResults) $("offlineBanner").classList.remove("hidden");
+      renderAiBoard();
+      return;
+    }
+    $("offlineBanner").classList.add("hidden");
     const { asset, entry, an } = sel;
     const plan = tradePlan(an, state.tf, state.capital, state.riskPct);
     const levels = swingLevels(entry.candles);
@@ -2809,14 +2813,14 @@ async function refresh(hard) {
     refreshNews().catch(() => {});
     aiScanAndTrade().catch(() => {});
 
-    const sources = new Set(results.map(r => r.entry.source));
     const badge = $("srcBadge");
-    if (sources.has("Simulated") && sources.size === 1) {
+    const anyStale = results.some(r => r.entry.stale);
+    if (anyStale) {
       badge.className = "src-badge demo";
-      $("srcText").textContent = "SIMULATED DATA — live feeds unreachable";
+      $("srcText").textContent = "RECONNECTING — showing last live prices";
     } else {
       badge.className = "src-badge live";
-      $("srcText").textContent = "LIVE · " + [...sources].filter(s => s !== "Simulated").join(" + ") + (sources.has("Simulated") ? " (partial sim)" : "");
+      $("srcText").textContent = "LIVE · " + [...new Set(results.map(r => r.entry.source))].join(" + ");
     }
     $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (err) {
@@ -2962,6 +2966,36 @@ function wireControls() {
     } else {
       try { localStorage.setItem("csd_alerts", "0"); } catch (_) {}
     }
+  });
+
+  // stay-alive plumbing: instant resume on reconnect or tab return, optional wake lock
+  let wakeLock = null;
+  const acquireWake = async () => {
+    try { wakeLock = await navigator.wakeLock.request("screen"); } catch (_) { $("wakeToggle").checked = false; }
+  };
+  $("wakeToggle").addEventListener("change", async () => {
+    if ($("wakeToggle").checked) {
+      if (!("wakeLock" in navigator)) {
+        $("wakeToggle").checked = false;
+        alert("This browser doesn't support keeping the screen awake — leave the tab open and the screen on instead.");
+        return;
+      }
+      await acquireWake();
+    } else if (wakeLock) {
+      try { wakeLock.release(); } catch (_) {}
+      wakeLock = null;
+    }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      if ($("wakeToggle").checked) acquireWake();   // wake locks drop when the tab hides
+      refresh(false);
+    }
+  });
+  window.addEventListener("online", () => refresh(true));
+  window.addEventListener("offline", () => {
+    $("srcBadge").className = "src-badge demo";
+    $("srcText").textContent = "OFFLINE — waiting for live prices";
   });
 
   let resizeT = null;

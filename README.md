@@ -39,8 +39,12 @@ One file, zero dependencies — open `index.html` in any browser.
   the trade plan's profit-taking notes.
 - **Full transparency**: every signal's reading and point contribution is listed in the
   breakdown table, and every chart has an accessible data-table twin.
-- Interactive SVG charts (price + EMAs + Bollinger wash, RSI, MACD) with crosshair
-  tooltips, light/dark theme, auto-refresh every 60 s.
+- **Live trading view** — TradingView-style candlestick chart (down to 1-minute bars)
+  with a position overlay: green zone from entry to take-profit, red zone from entry to
+  stop-loss, with SL/TP price and percentage labels; shows your open paper trade or the
+  engine's planned trade. Switchable to a line + indicators view.
+- Interactive SVG charts (RSI, MACD) with crosshair tooltips, light/dark theme,
+  auto-refresh every 60 s.
 
 ## Usage
 

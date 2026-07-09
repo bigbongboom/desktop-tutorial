@@ -23,11 +23,15 @@ One file, zero dependencies — open `index.html` in any browser.
 - **Backtester** — replays the exact engine bar-by-bar with zero lookahead (entries on
   the next bar's open, stop counted before target): win rate, profit factor, expectancy,
   max drawdown, equity curve, and a per-timeframe comparison vs buy & hold.
-- **Auto-Trader AI** — sweeps all 4 markets × 5 timeframes every refresh, ranks setups
-  by signal strength, timeframe agreement and crowd positioning, and lists its long/short
-  decisions. An Autopilot switch lets it place the top calls in the paper account
-  automatically (one per market, three max, risk-budget sized, ≤5×). Deterministic and
-  backtestable — not a black box — and paper-only by design.
+- **Auto-Trader AI** — an expert system managing its own compounding $100 paper account.
+  Sweeps all 4 markets × 5 timeframes every refresh at live prices, reads the regime
+  (aggressive in trends, defensive half-size and STRONG-only in chop), and sizes by
+  conviction (1% risk at 50% conviction up to 2% at 90%+, minimum 1:2 reward:risk,
+  leverage ≤5×, never spending margin it doesn't have). Every trade records its
+  rationale and placement time; every close writes a journal entry with a lesson and
+  updates a per-setup win/loss memory that feeds back into future rankings — chronic
+  losers get down-ranked, earners up-ranked. A running performance log tracks win rate,
+  realized P&L and portfolio value. Deterministic and auditable — paper-only by design.
 - **Leverage up to 40×** on manual tickets, with honest liquidation math: an estimated
   liquidation price on the ticket and chart, escalating warnings, and paper positions
   that actually liquidate when price crosses it.

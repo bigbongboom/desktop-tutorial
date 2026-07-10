@@ -224,10 +224,12 @@
   .engine-settings summary:hover { color: var(--text-primary); }
   .engine-settings .fields { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-top: 12px; }
   .engine-settings label { font-size: 11px; color: var(--text-muted); font-weight: 600; display: flex; flex-direction: column; gap: 4px; }
-  .engine-settings select {
+  .engine-settings select, .engine-settings input {
     font: inherit; font-size: 12.5px; padding: 7px 9px; border-radius: 8px;
     border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
   }
+  .engine-settings input { width: 210px; }
+  .settings-note code { font-size: 11px; background: var(--chip); padding: 1px 5px; border-radius: 5px; }
   .engine-settings .reset-link { font-size: 12px; font-weight: 600; color: var(--series-1); background: none; border: none; cursor: pointer; padding: 8px 0; }
   .settings-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
   .ai-toggle { font-size: 13px; display: flex; gap: 8px; align-items: center; color: var(--text-primary); cursor: pointer; }
@@ -412,9 +414,12 @@
           <option value="5">5.0 ×ATR — moonshot</option>
         </select>
       </label>
+      <label>External predictor URL
+        <input id="cfgPredictor" type="url" placeholder="http://localhost:8910" spellcheck="false">
+      </label>
       <button class="reset-link" id="cfgReset" type="button">Reset defaults</button>
     </div>
-    <p class="settings-note">These settings drive everything — verdict labels, alerts, trade tickets AND the backtester. Tune them, then hit "Run backtest" to see how your configuration would have performed before you trust it. Strong signals automatically get +1.0 ×ATR extra target.</p>
+    <p class="settings-note">These settings drive everything — verdict labels, alerts, trade tickets AND the backtester. Tune them, then hit "Run backtest" to see how your configuration would have performed before you trust it. Strong signals automatically get +1.0 ×ATR extra target. The external predictor URL connects a companion app running on your own machine (e.g. a BTC predictor on localhost:8910): it must serve <code>/signals.json</code> with CORS enabled — <code>{"signals":[{"symbol":"BTC","direction":"long","confidence":78,"note":"..."}]}</code> — and its calls then appear in Market Pulse and nudge the AI's rankings by a bounded ±6.</p>
   </details>
 
   <!-- overview -->
@@ -637,7 +642,7 @@ const state = {
 
 /* Engine settings — every knob customizable, persisted, and honored by the
    verdict labels, trade plan, tickets, alerts AND the backtester. */
-const CFG_DEFAULTS = { enterTh: 18, strongTh: 45, stopMult: 1.5, tgtMult: 2.5, trigger: "strong" };
+const CFG_DEFAULTS = { enterTh: 18, strongTh: 45, stopMult: 1.5, tgtMult: 2.5, trigger: "strong", predictorUrl: "" };
 function loadCfg() {
   try { return { ...CFG_DEFAULTS, ...JSON.parse(localStorage.getItem("csd_cfg") || "{}") }; }
   catch (_) { return { ...CFG_DEFAULTS }; }
@@ -1282,6 +1287,36 @@ async function fetchPulse() {
     }
   } catch (_) {}
   return out;
+}
+
+/* ---------- external predictor bridge (companion app on your machine) ----------
+   Contract: GET {url}/signals.json (or {url}) returning
+   {"signals":[{"symbol":"BTC","direction":"long|short|neutral","confidence":0-100,"note":"..."}]}
+   with Access-Control-Allow-Origin set. Calls are shown in Market Pulse and nudge
+   the AI's rankings by a BOUNDED ±6 — a broken feed can never hijack the bot. */
+async function fetchExternalPredictor() {
+  const url = (state.cfg.predictorUrl || "").trim().replace(/\/+$/, "");
+  if (!url || !/^https?:\/\//i.test(url)) { state.external = null; return; }
+  if (state.external && state.external.url === url && Date.now() - state.external.at < 55_000) return;
+  let j = null;
+  try { j = await fetchJson(url + "/signals.json"); }
+  catch (_) { try { j = await fetchJson(url); } catch (_) {} }
+  const byAsset = {};
+  let ok = false;
+  const list = Array.isArray(j) ? j : (j && Array.isArray(j.signals) ? j.signals : null);
+  if (list) {
+    for (const s of list) {
+      if (!s || typeof s !== "object") continue;
+      const sym = String(s.symbol || s.asset || s.coin || "").toUpperCase().replace(/[-/]?USDT?$/, "");
+      if (!ASSETS.some(a => a.id === sym)) continue;
+      const d = String(s.direction || s.side || s.signal || "").toLowerCase();
+      const dir = /long|buy|bull|up/.test(d) ? 1 : /short|sell|bear|down/.test(d) ? -1 : 0;
+      const conf = clamp(parseFloat(s.confidence != null ? s.confidence : s.conf) || 0, 0, 100);
+      byAsset[sym] = { dir, conf, note: String(s.note || s.reason || "").slice(0, 140) };
+      ok = true;
+    }
+  }
+  state.external = { url, at: Date.now(), ok, byAsset };
 }
 
 /* ---------- news (CryptoCompare public feed) ---------- */
@@ -2098,6 +2133,15 @@ async function aiScanAndTrade() {
     const learn = learnAdjust(sc.asset.id, sc.tf, dir);
     rank += learn.adj;
 
+    // external predictor bridge: bounded ±6 nudge when the companion app has a call
+    const ext = state.external && state.external.byAsset[sc.asset.id];
+    let extTxt = "";
+    if (ext && ext.dir !== 0) {
+      const nudge = Math.min(6, ext.conf / 15) * (ext.dir === dir ? 1 : -1);
+      rank += nudge;
+      extTxt = " · external predictor " + (ext.dir === dir ? "agrees" : "disagrees") + " (" + ext.conf.toFixed(0) + "%, rank " + (nudge >= 0 ? "+" : "") + nudge.toFixed(1) + ")";
+    }
+
     // measured confidence — every term is computed from the chart, none invented:
     // the engine is replayed over this chart's ENTIRE history (cached until a new
     // candle closes) and its real win rate / expectancy there feeds the number.
@@ -2132,7 +2176,7 @@ async function aiScanAndTrade() {
       agree + " other TF" + (agree === 1 ? "" : "s") + " aligned · drivers: " + (drivers || "mixed") +
       " · regime: " + regime +
       " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
-      " · exits: " + exits.note + " · " + convDetail;
+      " · exits: " + exits.note + extTxt + " · " + convDetail;
     decisions.push({
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction, rank, entry: sc.an.price,
@@ -2422,6 +2466,21 @@ async function refreshPulse(asset) {
     if (apr > 25) notes.push(asset.id + " longs are crowded and paying " + apr.toFixed(0) + "% APR to stay in — squeeze risk works against fresh longs and is a tailwind for shorts.");
     else if (apr < -25) notes.push(asset.id + " shorts are crowded and paying " + Math.abs(apr).toFixed(0) + "% APR — short-squeeze fuel; a tailwind for longs.");
     else notes.push(asset.id + " funding is near neutral — no positioning edge either way.");
+  }
+  // external predictor bridge — the companion app's calls, when connected
+  try { await fetchExternalPredictor(); } catch (_) {}
+  if ((state.cfg.predictorUrl || "").trim()) {
+    const ext = state.external;
+    if (ext && ext.ok) {
+      for (const [sym, s] of Object.entries(ext.byAsset)) {
+        addTile(tiles, "🔗 " + sym + " external call", s.dir > 0 ? "LONG" : s.dir < 0 ? "SHORT" : "NEUTRAL",
+          "predictor confidence " + s.conf.toFixed(0) + "%" + (s.note ? " · " + s.note : ""),
+          s.dir > 0 ? getCss("--status-good") : s.dir < 0 ? getCss("--status-critical") : null);
+      }
+      notes.push("External predictor connected — its calls nudge the AI's rankings by a bounded ±6 when they agree or disagree with the engine.");
+    } else {
+      notes.push("External predictor configured but not answering — it must serve /signals.json with CORS enabled (see Engine settings for the exact format); the desk keeps trying.");
+    }
   }
   if (!tiles.children.length) {
     tiles.appendChild(el("p", "empty-note", "Positioning and sentiment feeds are unreachable right now — they retry on the next refresh."));
@@ -3097,7 +3156,15 @@ function wireControls() {
     $("cfgStrong").value = String(state.cfg.strongTh);
     $("cfgStop").value = String(state.cfg.stopMult);
     $("cfgTgt").value = String(state.cfg.tgtMult);
+    $("cfgPredictor").value = state.cfg.predictorUrl || "";
   };
+  $("cfgPredictor").addEventListener("change", () => {
+    state.cfg.predictorUrl = $("cfgPredictor").value.trim();
+    saveCfg();
+    state.external = null;   // refetch against the new URL
+    state.pulseAt = 0;
+    refresh(false);
+  });
   syncCfgUI();
   for (const [id, key] of Object.entries(cfgFields)) {
     $(id).addEventListener("change", () => {

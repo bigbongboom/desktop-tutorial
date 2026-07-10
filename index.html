@@ -449,7 +449,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, using leverage up to <strong>each market's real exchange maximum</strong> (read live from Hyperliquid — e.g. 40× BTC) while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk, and never places a ticket under $8 notional — exchange fees eat anything smaller. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It bets <strong>10% of its capital minimum, scaling to 40% at max confidence, with up to 80% of the portfolio deployed at once</strong> — leverage is solved mathematically per trade (up to each market's real exchange maximum, e.g. 40× BTC) so the loss-if-stopped lands at 2–4% of equity (6% hard ceiling). Fee-efficient by design: no dust tickets, ever. <strong>It refuses to chase:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. After any close it stands down on that coin (~3 bars; 3× longer after losses) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -1124,6 +1124,51 @@ function swingLevels(candles, lookback = SHOWN, k = 3) {
     res: highs.filter(h => h > price).sort((x, y) => x - y)[0] ?? null,
     sup: lows.filter(l => l < price).sort((x, y) => y - x)[0] ?? null,
   };
+}
+
+/* TradingView-style technical rating — the published methodology behind TV's
+   Buy/Sell gauge: a consensus vote of moving averages (price vs SMA/EMA
+   10/20/30/50/100/200) plus oscillators (RSI, Stochastic, MACD, Momentum,
+   CCI-20, Williams %R), computed locally on live candles. */
+function tvRating(candles) {
+  const closes = candles.map(c => c.c);
+  const i = closes.length - 1;
+  const price = closes[i];
+  let buy = 0, sell = 0, total = 0;
+  const vote = (b, s) => { total++; if (b) buy++; else if (s) sell++; };
+  for (const p of [10, 20, 30, 50, 100, 200]) {
+    if (i + 1 >= p) {
+      let sum = 0;
+      for (let k = i - p + 1; k <= i; k++) sum += closes[k];
+      vote(price > sum / p, price < sum / p);
+      const e = ema(closes, p)[i];
+      if (e != null) vote(price > e, price < e);
+    }
+  }
+  const r = rsi(closes, 14)[i];
+  if (r != null) vote(r < 30, r > 70);
+  const st = stochastic(candles, 14, 3);
+  if (st.k[i] != null) vote(st.k[i] < 20, st.k[i] > 80);
+  const m = macd(closes);
+  if (m.line[i] != null && m.signal[i] != null) vote(m.line[i] > m.signal[i], m.line[i] < m.signal[i]);
+  if (i >= 10) vote(closes[i] > closes[i - 10], closes[i] < closes[i - 10]);
+  if (i >= 19) {
+    const n = 20, tp = [];
+    for (let k = i - n + 1; k <= i; k++) tp.push((candles[k].h + candles[k].l + candles[k].c) / 3);
+    const mean = tp.reduce((a, b) => a + b, 0) / n;
+    const md = tp.reduce((a, b) => a + Math.abs(b - mean), 0) / n;
+    const cci = md > 0 ? (tp[n - 1] - mean) / (0.015 * md) : 0;
+    vote(cci < -100, cci > 100);
+  }
+  if (i >= 13) {
+    let hh = -Infinity, ll = Infinity;
+    for (let k = i - 13; k <= i; k++) { hh = Math.max(hh, candles[k].h); ll = Math.min(ll, candles[k].l); }
+    const wr = hh > ll ? ((hh - price) / (hh - ll)) * -100 : -50;
+    vote(wr < -80, wr > -20);
+  }
+  const score = total ? (buy - sell) / total : 0;
+  const label = score > 0.5 ? "STRONG BUY" : score > 0.1 ? "BUY" : score < -0.5 ? "STRONG SELL" : score < -0.1 ? "SELL" : "NEUTRAL";
+  return { score, label, buy, sell, total };
 }
 
 /* Regime read from an analysis: how strongly is this chart actually trending? */
@@ -2133,6 +2178,36 @@ async function aiScanAndTrade() {
     const learn = learnAdjust(sc.asset.id, sc.tf, dir);
     rank += learn.adj;
 
+    // DON'T-CHASE gate: never enter an already-exhausted move. Longs are blocked
+    // when RSI is overbought, price is stretched >2×ATR above its mean, or it's
+    // pressing the top band without a FRESH breakout — pullbacks are the entries.
+    const liC = sc.an.rsi.length - 1;
+    const rsiNow = sc.an.rsi[liC];
+    const pbNow = (sc.an.bb.upper[liC] != null && sc.an.bb.upper[liC] !== sc.an.bb.lower[liC])
+      ? (sc.an.price - sc.an.bb.lower[liC]) / (sc.an.bb.upper[liC] - sc.an.bb.lower[liC]) : 0.5;
+    const e20Now = sc.an.e20[liC];
+    const distE20 = (e20Now != null && sc.an.atrNow > 0) ? (sc.an.price - e20Now) / sc.an.atrNow : 0;
+    const cs = sc.candles;
+    let hi20 = -Infinity, lo20 = Infinity;
+    for (let k = Math.max(0, cs.length - 21); k < cs.length - 1; k++) { hi20 = Math.max(hi20, cs[k].h); lo20 = Math.min(lo20, cs[k].l); }
+    const prevClose = cs.length > 1 ? cs[cs.length - 2].c : sc.an.price;
+    const freshBreak = dir > 0 ? (sc.an.price > hi20 && prevClose <= hi20) : (sc.an.price < lo20 && prevClose >= lo20);
+    let chase = null;
+    if (dir > 0) {
+      if (rsiNow != null && rsiNow > 72) chase = "RSI " + rsiNow.toFixed(0) + " overbought — late in the move";
+      else if (distE20 > 2) chase = distE20.toFixed(1) + "×ATR above EMA20 — extended, wait for the pullback";
+      else if (pbNow > 0.92 && !freshBreak) chase = "pressing the top band without a fresh breakout";
+    } else {
+      if (rsiNow != null && rsiNow < 28) chase = "RSI " + rsiNow.toFixed(0) + " oversold — late in the move";
+      else if (distE20 < -2) chase = (-distE20).toFixed(1) + "×ATR below EMA20 — extended, wait for the bounce";
+      else if (pbNow < 0.08 && !freshBreak) chase = "pressing the bottom band without a fresh breakdown";
+    }
+    if (chase) rank -= 12;
+
+    // TradingView-style consensus rating feeds confidence (±12)
+    const tv = tvRating(sc.candles);
+    const tvPts = clamp(tv.score * (dir > 0 ? 1 : -1) * 12, -12, 12);
+
     // external predictor bridge: bounded ±6 nudge when the companion app has a call
     const ext = state.external && state.external.byAsset[sc.asset.id];
     let extTxt = "";
@@ -2158,12 +2233,13 @@ async function aiScanAndTrade() {
     const sigPts = Math.min(Math.abs(sc.an.score), 70) * 0.35;
     const alignPts = Math.min(agree, 3) * 5;
     const regimePts = clamp(trendStrength, 0, 1.5) * 8;
-    const conviction = Math.round(clamp(25 + sigPts + histPts + alignPts + regimePts + learn.adj, 5, 95));
+    const conviction = Math.round(clamp(25 + sigPts + histPts + alignPts + regimePts + learn.adj + tvPts, 5, 95));
     const convDetail = "confidence " + conviction + "% = base 25 + signal " + sigPts.toFixed(0) +
       " + chart history " + (histPts >= 0 ? "+" : "") + histPts.toFixed(0) +
       " (" + (bt.stats.n ? bt.stats.n + " replayed trades, " + bt.stats.winRate.toFixed(0) + "% win, " + (bt.stats.avgR >= 0 ? "+" : "") + bt.stats.avgR.toFixed(2) + "R avg over " + bt.barsTested + " bars" : "no replay sample") + ")" +
       " + alignment " + alignPts + " + regime " + regimePts.toFixed(0) +
-      " + lessons " + (learn.adj >= 0 ? "+" : "") + learn.adj;
+      " + lessons " + (learn.adj >= 0 ? "+" : "") + learn.adj +
+      " + TV-rating " + (tvPts >= 0 ? "+" : "") + tvPts.toFixed(0) + " (" + tv.label + " " + tv.buy + "/" + tv.sell + " of " + tv.total + ")";
 
     const strong = Math.abs(sc.an.score) >= cfg.strongTh;
     const exits = smartLevels(dir, sc.an.price, sc.an.atrNow, conviction, regime, strong, sc.candles);
@@ -2176,12 +2252,13 @@ async function aiScanAndTrade() {
       agree + " other TF" + (agree === 1 ? "" : "s") + " aligned · drivers: " + (drivers || "mixed") +
       " · regime: " + regime +
       " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
+      " · entry quality: " + (chase ? "DON'T CHASE — " + chase : "good (" + Math.abs(distE20).toFixed(1) + "×ATR from EMA20)") +
       " · exits: " + exits.note + extTxt + " · " + convDetail;
     decisions.push({
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction, rank, entry: sc.an.price,
       stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
-      stopDist, regime, rationale, sim: sc.source === "Simulated",
+      stopDist, regime, rationale, chase, sim: sc.source === "Simulated",
     });
   }
   decisions.sort((a, b) => b.rank - a.rank);
@@ -2278,10 +2355,19 @@ function aiAccountStats(results) {
   const invested = openAi.reduce((s, p) => s + (p.invested != null ? p.invested : (p.qty * p.entry) / (p.lev || 1)), 0);
   return { equity: AI_START + realized + unrealized, realized, unrealized, invested, openCount: openAi.length };
 }
-/* Confidence → risk: 1% of the AI's equity at 50% confidence, 2% at 95% (hard 1–2% band). */
-function convictionRisk(conviction) { return (1 + clamp(((conviction || 50) - 50) / 45, 0, 1)) / 100; }
-/* Confidence → capital deployed (margin): 3% of equity at 50% confidence up to 15% at 95%. */
-function convictionInvest(conviction) { return 0.03 + clamp(((conviction || 50) - 50) / 45, 0, 1) * 0.12; }
+/* Cooldown after any close on an asset: no instant re-entry — the #1 way bots
+   churn fees. Wins wait ~3 bars (min 30 min); losses and manual closes wait 3×. */
+function inCooldown(assetId, tf) {
+  const j = loadJournal();
+  let e = null;
+  for (let k = j.length - 1; k >= 0; k--) {
+    if (j[k].asset === assetId && j[k].result !== "note") { e = j[k]; break; }
+  }
+  if (!e) return false;
+  const base = Math.max(3 * TIMEFRAMES[tf].minutes * 60_000, 30 * 60_000);
+  const mult = (e.result === "tp" || e.result === "early") ? 1 : 3;
+  return Date.now() - e.t < base * mult;
+}
 
 function autoPilotExecute(decisions) {
   const cfg = state.cfg;
@@ -2297,43 +2383,48 @@ function autoPilotExecute(decisions) {
   for (const d of decisions || []) {
     if (openCount >= 3) break;                        // hard cap: three simultaneous positions
     if (!meets(d) || openAssets.has(d.asset.id) || !(d.stopDist > 0)) continue;
-    // defensive in chop: only STRONG signals qualify, and size is halved
+    if (d.chase) continue;                            // never chase an exhausted move
+    if (inCooldown(d.asset.id, d.tf)) continue;       // no instant re-entry after a close
+    // defensive in chop: only STRONG signals qualify
     if (d.regime === "chop" && Math.abs(d.score) < cfg.strongTh) continue;
     const available = equity - investedSoFar;         // free cash — the AI can't spend money it doesn't have
-    if (available < 5) break;
-    const regimeMult = d.regime === "chop" ? 0.5 : d.regime === "mixed" ? 0.75 : 1;
-    const riskPct = convictionRisk(d.conviction) * regimeMult;
-    // capital committed scales with measured confidence: 3% → 15% of equity
-    const investedCap = Math.min(equity * convictionInvest(d.conviction) * regimeMult, available);
+
+    // ---- fee-efficient conviction sizing: bets are 10% → 40% of equity, total
+    // deployment capped at 80%, leverage solved so risk lands at 2–4% (6% hard cap)
+    const confNorm = clamp((d.conviction - 50) / 45, 0, 1);
+    const minBet = equity * 0.10;
+    const deployLeft = equity * 0.80 - investedSoFar;
+    let invested = equity * (0.10 + confNorm * 0.30);
+    if (d.regime === "chop") invested = Math.max(minBet, invested * 0.6);
+    invested = Math.min(invested, deployLeft, available);
+    if (invested < minBet - 1e-9) continue;           // can't place a full-size bet — stand aside
     const mLev = maxLevFor(d.asset.id);               // this market's real exchange maximum
-    let qty = (equity * riskPct) / d.stopDist;
-    let notional = qty * d.entry;
-    const maxNotional = investedCap * mLev;           // confidence-scaled margin at up to the exchange max
-    if (notional > maxNotional) { notional = maxNotional; qty = notional / d.entry; }
-    // fee floor: bump tiny tickets up to the $8 minimum when the extra risk is
-    // still safe (≤3% of equity); otherwise the trade isn't worth its fees — skip
-    if (notional < MIN_NOTIONAL) {
-      const bumpedRisk = (MIN_NOTIONAL / d.entry) * d.stopDist;
-      if (bumpedRisk > equity * 0.03 || MIN_NOTIONAL > maxNotional) continue;
-      notional = MIN_NOTIONAL;
-      qty = notional / d.entry;
+    const stopPct = d.stopDist / d.entry;
+    if (!(stopPct > 0)) continue;
+    const riskTarget = equity * (0.02 + confNorm * 0.02);
+    let lev = Math.max(1, Math.min(mLev, Math.round(riskTarget / (invested * stopPct))));
+    let notional = invested * lev;
+    if (notional * stopPct > equity * 0.06) {         // hard risk ceiling
+      lev = Math.max(1, Math.floor((equity * 0.06) / (invested * stopPct)));
+      notional = invested * lev;
+      if (notional * stopPct > equity * 0.06) continue;   // stop too wide even at 1× — not tradeable at min size
     }
-    const lev = Math.max(1, Math.min(mLev, Math.ceil(notional / investedCap)));
-    const invested = notional / lev;
+    if (notional < MIN_NOTIONAL) continue;            // never pay fees on dust
+    const qty = notional / d.entry;
     investedSoFar += invested;
     positions.push({
       id: "p" + Date.now() + Math.random().toString(36).slice(2, 6),
       asset: d.asset.id, tf: d.tf, dir: d.dir, entry: d.entry, stop: d.stop, target: d.target,
       qty, lev, liq: liqPrice(d.entry, d.dir, lev), riskAmt: qty * d.stopDist, stopDist: d.stopDist, stopDist0: d.stopDist,
-      invested, conviction: d.conviction, riskPctUsed: riskPct, rationale: d.rationale,
+      invested, conviction: d.conviction, riskPctUsed: (qty * d.stopDist) / Math.max(equity, 1), rationale: d.rationale,
       openedAt: Date.now(), status: "open", placedBy: "AI", live: true,
     });
     openAssets.add(d.asset.id); openCount++; placed++;
     if (alertsEnabled()) {
       try {
         new Notification("🤖 Autopilot: " + (d.dir > 0 ? "LONG " : "SHORT ") + d.asset.id + " · " + TIMEFRAMES[d.tf].label, {
-          body: "Invested " + fmtMoney(invested) + " (" + ((invested / Math.max(equity, 1)) * 100).toFixed(1) + "% of its " + fmtMoney(equity) +
-                ") at " + d.conviction + "% confidence · risk " + (riskPct * 100).toFixed(1) +
+          body: "Invested " + fmtMoney(invested) + " (" + ((invested / Math.max(equity, 1)) * 100).toFixed(0) + "% of its " + fmtMoney(equity) +
+                ") at " + d.conviction + "% confidence, " + lev + "× · risk " + (((qty * d.stopDist) / Math.max(equity, 1)) * 100).toFixed(1) +
                 "% · entry " + fmtUsd(d.entry) + " · stop " + fmtUsd(d.stop) + " · target " + fmtUsd(d.target),
         });
       } catch (_) {}
@@ -2456,6 +2547,12 @@ async function refreshPulse(asset) {
     else if (pulse.fng.value <= 25) notes.push("Sentiment is in extreme fear (" + pulse.fng.value + ") — historically where contrarian longs have the best odds.");
     else notes.push("Sentiment is mid-range (" + pulse.fng.value + ", " + pulse.fng.cls + ") — no extreme to lean on.");
   }
+  if (state.tvSel && state.tvSel.assetId === asset.id) {
+    const tv = state.tvSel;
+    addTile(tiles, asset.id + " TradingView-style rating", tv.label,
+      tv.buy + " buy / " + tv.sell + " sell of " + tv.total + " indicators (" + TIMEFRAMES[tv.tf].label + ")",
+      tv.score > 0.1 ? getCss("--status-good") : tv.score < -0.1 ? getCss("--status-critical") : null);
+  }
   const ctx = pulse.ctx[asset.hl];
   if (ctx && isFinite(ctx.funding)) {
     const apr = ctx.funding * 24 * 365 * 100;
@@ -2560,7 +2657,7 @@ function renderPositions(results) {
     "started with " + fmtMoney(AI_START) + " · realized " + (ai.realized >= 0 ? "+" : "") + fmtMoney(ai.realized),
     ai.equity >= AI_START ? getCss("--status-good") : getCss("--status-critical"));
   addTile(sum, "🤖 AI invested now", fmtMoney(ai.invested),
-    ai.openCount + " position" + (ai.openCount === 1 ? "" : "s") + " · 3–15% of capital per trade by confidence",
+    ai.openCount + " position" + (ai.openCount === 1 ? "" : "s") + " · 10–40% per bet by confidence, ≤80% deployed",
     null);
 
   // record stats
@@ -3029,6 +3126,7 @@ async function refresh(hard) {
     const plan = tradePlan(an, state.tf, state.capital, state.riskPct, entry.candles);
     state.lastPlan = { assetId: asset.id, tf: state.tf, plan, an };
     state.lastResults = results;
+    state.tvSel = { assetId: asset.id, tf: state.tf, ...tvRating(entry.candles) };
 
     purgeLegacyPositions(results);
     settlePositions(results);

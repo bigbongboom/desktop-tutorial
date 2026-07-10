@@ -35,13 +35,16 @@ One file, zero dependencies — open `index.html` in any browser.
   stops never widen, and every action is journaled.
 - **Auto-Trader AI** — an expert system managing its own compounding $100 paper account.
   Sweeps all 4 markets × 5 timeframes every refresh at live prices, reads the regime
-  (aggressive in trends, defensive half-size and STRONG-only in chop), and sizes by
-  conviction (1% risk at 50% conviction up to 2% at 90%+, minimum 1:2 reward:risk,
-  leverage ≤5×, never spending margin it doesn't have). Every trade records its
-  rationale and placement time; every close writes a journal entry with a lesson and
-  updates a per-setup win/loss memory that feeds back into future rankings — chronic
-  losers get down-ranked, earners up-ranked. A running performance log tracks win rate,
-  realized P&L and portfolio value. Deterministic and auditable — paper-only by design.
+  (full size in trends, STRONG-only in chop), computes a measured confidence (signal +
+  whole-chart replay + timeframe alignment + regime + lessons + a TradingView-style
+  consensus rating of 12 moving averages and 6 oscillators), and bets 10–40% of its
+  capital per trade by confidence with ≤80% deployed at once — leverage solved per
+  trade (up to each market's exchange maximum) so risk-if-stopped lands at 2–4% of
+  equity (6% ceiling), minimum 1:2 reward:risk. It refuses to chase extended moves
+  (RSI/band/EMA-distance gates; pullbacks are the entries) and stands down on a coin
+  after any close (3× longer after losses). Every trade records its rationale and
+  placement time; every close journals a lesson into a per-setup memory that re-ranks
+  future setups. Deterministic and auditable — paper-only by design.
 - **Leverage up to 40×** on manual tickets, with honest liquidation math: an estimated
   liquidation price on the ticket and chart, escalating warnings, and paper positions
   that actually liquidate when price crosses it.

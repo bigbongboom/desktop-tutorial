@@ -26,6 +26,13 @@ One file, zero dependencies — open `index.html` in any browser.
 - **Backtester** — replays the exact engine bar-by-bar with zero lookahead (entries on
   the next bar's open, stop counted before target): win rate, profit factor, expectancy,
   max drawdown, equity curve, and a per-timeframe comparison vs buy & hold.
+- **Smart Exit Engine** — stops and targets are placed adaptively per trade: parked
+  beyond real swing structure when in range, tightened by confidence, stretched targets
+  in trends and trimmed in chop, always ≥1:2 reward:risk. Open AI trades are then
+  managed live every cycle: breakeven lock at +1R, ATR trailing past +1.5R, target
+  extension while momentum stays strongly in favor, early profit-banking when the
+  engine stops believing in the target, and immediate cuts when the signal flips —
+  stops never widen, and every action is journaled.
 - **Auto-Trader AI** — an expert system managing its own compounding $100 paper account.
   Sweeps all 4 markets × 5 timeframes every refresh at live prices, reads the regime
   (aggressive in trends, defensive half-size and STRONG-only in chop), and sizes by

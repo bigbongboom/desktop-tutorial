@@ -444,7 +444,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, using leverage up to <strong>each market's real exchange maximum</strong> (read live from Hyperliquid — e.g. 40× BTC) while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, using leverage up to <strong>each market's real exchange maximum</strong> (read live from Hyperliquid — e.g. 40× BTC) while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -519,7 +519,7 @@
   <!-- backtest -->
   <section class="card chart-card">
     <h2>Backtest — proving the engine on history</h2>
-    <p class="sub">Replays the exact same signal engine bar-by-bar over the fetched history with zero lookahead: entries fill on the next bar's open, and when a bar touches both stop and target the stop counts first (the conservative assumption). Excludes fees, funding and slippage — live results will be somewhat worse.</p>
+    <p class="sub">Replays the exact same signal engine bar-by-bar over the fetched history with zero lookahead: entries fill on the next bar's open, and when a bar touches both stop and target the stop counts first (the conservative assumption). Excludes fees, funding and slippage. Note: this tests entries with fixed exits — the live AI additionally manages exits (breakeven locks, trailing, early cuts and banks), so its real record will differ.</p>
     <button class="btn" id="runBacktest" type="button">Run backtest</button>
     <div id="btResults"></div>
     <div class="tooltip" id="btTip"></div>
@@ -1120,6 +1120,54 @@ function swingLevels(candles, lookback = SHOWN, k = 3) {
   };
 }
 
+/* Regime read from an analysis: how strongly is this chart actually trending? */
+function regimeOf(an) {
+  const li = an.e20.length - 1;
+  const ts = (an.e20[li] != null && an.e50[li] != null && an.atrNow > 0)
+    ? Math.abs(an.e20[li] - an.e50[li]) / an.atrNow : 0;
+  return ts >= 1 ? "trend" : ts >= 0.5 ? "mixed" : "chop";
+}
+
+/* ============================================================
+   Smart Exit Engine — entry-time placement. Stops park beyond
+   real swing structure when it's in range (instead of a blind
+   ATR multiple), tighten with confidence and chop; targets
+   stretch with confidence and trend, trim to the next structure
+   level, and always keep at least 1:2 reward:risk.
+   ============================================================ */
+function smartLevels(dir, entry, atr, conviction, regime, strong, candles) {
+  const cfg = state.cfg;
+  let stopMult = cfg.stopMult * (1.15 - (conviction || 50) / 400);   // confident entries afford tighter stops
+  if (regime === "chop") stopMult *= 0.9;
+  let stopDist = Math.max(stopMult * atr, 0.4 * atr);
+  let snappedStop = false, snappedTgt = false;
+  let barrier = null;
+  if (candles && candles.length > 30) {
+    const lv = swingLevels(candles);
+    const guard = dir > 0 ? lv.sup : lv.res;      // the structure protecting the trade
+    if (guard != null) {
+      const gDist = Math.abs(entry - guard) + 0.25 * atr;   // park the stop just beyond it
+      if (gDist >= 0.6 * atr && gDist <= 2.2 * atr) { stopDist = gDist; snappedStop = true; }
+    }
+    barrier = dir > 0 ? lv.res : lv.sup;          // the structure in the trade's way
+  }
+  let tgtMult = Math.max(strong ? cfg.tgtMult + 1 : cfg.tgtMult, 2 * (stopDist / atr));
+  tgtMult *= 0.8 + (conviction || 50) / 200;      // higher confidence → stretch the target
+  if (regime === "trend") tgtMult *= 1.15;
+  else if (regime === "chop") tgtMult *= 0.9;
+  let tgtDist = Math.max(tgtMult * atr, 2 * stopDist);   // 1:2 RR floor, always
+  if (barrier != null) {
+    const bDist = Math.abs(barrier - entry) - 0.15 * atr; // take profit just in front of the wall
+    if (bDist >= 2 * stopDist && bDist < tgtDist) { tgtDist = bDist; snappedTgt = true; }
+  }
+  return {
+    stopDist, tgtDist,
+    note: (snappedStop ? "stop parked beyond swing structure" : "ATR-based stop") + ", target " +
+          (snappedTgt ? "trimmed to the next structure level" : "confidence-stretched") +
+          " (" + (stopDist / atr).toFixed(1) + "× / " + (tgtDist / atr).toFixed(1) + "×ATR)",
+  };
+}
+
 /* ============================================================
    Backtester — replays the engine bar-by-bar, entries on the
    NEXT bar's open, stop counted before target when both hit.
@@ -1176,14 +1224,16 @@ function backtest(candles) {
 }
 
 /* Trade plan: ATR-anchored levels + fixed-fractional position sizing. */
-function tradePlan(an, tf, capital, riskPct) {
+function tradePlan(an, tf, capital, riskPct, candles) {
   const cfg = state.cfg;
   const dir = an.score >= cfg.enterTh ? 1 : an.score <= -cfg.enterTh ? -1 : 0;
   const strong = Math.abs(an.score) >= cfg.strongTh;
   const entry = an.price;
-  const stopMult = cfg.stopMult, tgtMult = strong ? cfg.tgtMult + 1 : cfg.tgtMult;
-  const stopDist = stopMult * an.atrNow;
-  const tgtDist = tgtMult * an.atrNow;
+  const exits = smartLevels(dir || 1, entry, an.atrNow, an.conviction, regimeOf(an), strong, candles);
+  const stopDist = exits.stopDist;
+  const tgtDist = exits.tgtDist;
+  const stopMult = stopDist / an.atrNow, tgtMult = tgtDist / an.atrNow;
+  const exitNote = exits.note;
   const stop = entry - dir * stopDist;
   const target = entry + dir * tgtDist;
   const rr = tgtMult / stopMult;
@@ -1201,7 +1251,7 @@ function tradePlan(an, tf, capital, riskPct) {
   const bars = tgtDist / (0.65 * an.atrNow);       // expected bars to cover the target at typical range
   const holdLo = bars * 0.7 * tfMin, holdHi = bars * 1.7 * tfMin;
 
-  return { dir, strong, entry, stop, target, rr, stopDist, tgtDist, stopMult, tgtMult,
+  return { dir, strong, entry, stop, target, rr, stopDist, tgtDist, stopMult, tgtMult, exitNote,
            riskAmt, qty, notional, leverage, capped, profitAtTarget, holdLo, holdHi };
 }
 
@@ -1313,6 +1363,7 @@ function recordTradeOutcome(pos) {
   saveLearn(learn);
   const side = pos.dir > 0 ? "LONG" : "SHORT";
   const record = s.wins + "W/" + (s.n - s.wins) + "L";
+  const rTxt = (pos.r >= 0 ? "+" : "") + (isFinite(pos.r) ? pos.r.toFixed(2) : "0.00") + "R";
   let lesson;
   if (pos.result === "tp")
     lesson = "Winner — " + pos.asset + " " + pos.tf + " " + side + " setups are earning (" + record + "); the engine up-ranks this pattern.";
@@ -1321,6 +1372,10 @@ function recordTradeOutcome(pos) {
              record + "; if it keeps losing it gets down-ranked automatically.";
   else if (pos.result === "liq")
     lesson = "LIQUIDATED — leverage exceeded what the volatility allowed. Rule reinforced: size down before levering up, and never widen a stop.";
+  else if (pos.result === "early")
+    lesson = "Banked " + rTxt + " early — the engine stopped believing the target would be hit; protecting real profit beats hoping (" + record + ").";
+  else if (pos.result === "cut")
+    lesson = "Cut early at " + rTxt + " — the signal flipped hard against the trade; a small controlled loss instead of riding to the full stop (" + record + ").";
   else
     lesson = "Closed manually — record for this setup now " + record + ".";
   const j = loadJournal();
@@ -1766,9 +1821,8 @@ function renderPlan(asset, an, plan, levels) {
   const dirTxt = plan.dir > 0 ? "LONG" : "SHORT";
   const dirColor = plan.dir > 0 ? getCss("--status-good") : getCss("--status-critical");
   $("planSub").textContent =
-    "Levels are anchored to the 14-bar ATR (" + fmtUsd(an.atrNow) + ", " + an.atrPct.toFixed(2) + "% per bar): stop " +
-    plan.stopMult.toFixed(1) + "×ATR, target " + plan.tgtMult.toFixed(1) +
-    "×ATR (your Engine settings), sized so a stop-out costs exactly your risk budget.";
+    "Adaptive levels (ATR " + fmtUsd(an.atrNow) + ", " + an.atrPct.toFixed(2) + "% per bar): " + plan.exitNote +
+    " — tuned by confidence, regime and chart structure, sized so a stop-out costs exactly your risk budget.";
 
   tile("Direction", (plan.dir > 0 ? "▲ " : "▼ ") + dirTxt, plan.strong ? "strong signal" : "standard signal", dirColor);
   tile("Entry (market)", fmtUsd(plan.entry), "or a limit slightly better");
@@ -1957,7 +2011,7 @@ function onPlaceTrade() {
   positions.push({
     id: "p" + Date.now(), asset: lp.assetId, tf: lp.tf, dir: t.dir,
     entry: lp.plan.entry, stop: t.stop, target: t.target,
-    qty: t.qty, lev: t.lev, liq: v.liq, riskAmt: v.riskAmt, stopDist: v.stopDist,
+    qty: t.qty, lev: t.lev, liq: v.liq, riskAmt: v.riskAmt, stopDist: v.stopDist, stopDist0: v.stopDist,
     openedAt: Date.now(), status: "open", placedBy: "manual", live: true,
   });
   savePositions(positions);
@@ -2065,10 +2119,8 @@ async function aiScanAndTrade() {
       " + lessons " + (learn.adj >= 0 ? "+" : "") + learn.adj;
 
     const strong = Math.abs(sc.an.score) >= cfg.strongTh;
-    const stopDist = cfg.stopMult * sc.an.atrNow;
-    // enforce a minimum 1:2 reward:risk no matter the settings
-    const tgtMult = Math.max(strong ? cfg.tgtMult + 1 : cfg.tgtMult, 2 * cfg.stopMult);
-    const tgtDist = tgtMult * sc.an.atrNow;
+    const exits = smartLevels(dir, sc.an.price, sc.an.atrNow, conviction, regime, strong, sc.candles);
+    const stopDist = exits.stopDist, tgtDist = exits.tgtDist;
     const drivers = sc.an.comps
       .filter(c => Math.sign(c.pts) === dir)
       .sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts))
@@ -2077,7 +2129,7 @@ async function aiScanAndTrade() {
       agree + " other TF" + (agree === 1 ? "" : "s") + " aligned · drivers: " + (drivers || "mixed") +
       " · regime: " + regime +
       " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
-      " · " + convDetail;
+      " · exits: " + exits.note + " · " + convDetail;
     decisions.push({
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction, rank, entry: sc.an.price,
@@ -2088,8 +2140,82 @@ async function aiScanAndTrade() {
   decisions.sort((a, b) => b.rank - a.rank);
   state.lastDecisions = decisions.slice(0, 8);
   state.scannedCount = valid.length;
+  manageAiPositions(valid);
   if (state.autoPilot) autoPilotExecute(state.lastDecisions);
   renderAiBoard();
+}
+
+/* ============================================================
+   Smart Exit Engine — live management. Every cycle the AI
+   re-reads each open trade's chart and acts: breakeven at +1R,
+   trail past +1.5R, extend the target while momentum stays
+   strongly in favor, bank profit early when it stops believing
+   in the target, cut immediately if the signal flips hard.
+   Stops only ever move in the trade's favor.
+   ============================================================ */
+function journalNote(pos, text) {
+  const j = loadJournal();
+  j.push({ t: Date.now(), asset: pos.asset, tf: pos.tf, dir: pos.dir, result: "note", r: 0, pnl: 0, by: "AI", lesson: text });
+  saveJournal(j);
+}
+function manageAiPositions(scans) {
+  const cfg = state.cfg;
+  const positions = loadPositions();
+  let changed = false, closedAny = false;
+  for (const pos of positions) {
+    if (pos.status !== "open" || pos.placedBy !== "AI") continue;
+    const sc = scans.find(s => s.asset.id === pos.asset && s.tf === pos.tf);
+    if (!sc) continue;                                   // no fresh live read — touch nothing
+    const an = sc.an;
+    const cur = an.price, atr = an.atrNow;
+    const base = pos.stopDist0 || pos.stopDist || Math.abs(pos.entry - pos.stop);
+    const uR = base > 0 ? (pos.dir * (cur - pos.entry)) / base : 0;
+    const dirScore = pos.dir * an.score;
+    pos.peak = pos.peak == null ? cur : (pos.dir > 0 ? Math.max(pos.peak, cur) : Math.min(pos.peak, cur));
+
+    // cut immediately: the engine has flipped confidently against the trade
+    if (dirScore <= -cfg.enterTh) {
+      closePosition(pos, cur, uR > 0 ? "early" : "cut");
+      changed = true; closedAny = true;
+      continue;
+    }
+    // bank real profit when the edge has faded — don't ride it back down
+    if (uR >= 1.2 && dirScore <= 0) {
+      closePosition(pos, cur, "early");
+      changed = true; closedAny = true;
+      continue;
+    }
+    // breakeven lock at +1R
+    const stopIsLoss = pos.dir > 0 ? pos.stop < pos.entry : pos.stop > pos.entry;
+    if (uR >= 1 && stopIsLoss) {
+      pos.stop = pos.entry + pos.dir * 0.1 * atr;
+      pos.mng = "breakeven";
+      changed = true;
+      journalNote(pos, "Moved the stop to breakeven (+0.1×ATR) at +1R on " + pos.asset + " " + pos.tf + " — worst case is now a scratch.");
+    }
+    // trail 1.6×ATR behind the best price once past +1.5R (never backwards)
+    if (uR >= 1.5) {
+      const trail = pos.peak - pos.dir * 1.6 * atr;
+      if (pos.dir > 0 ? trail > pos.stop : trail < pos.stop) {
+        pos.stop = trail;
+        pos.mng = "trailing";
+        changed = true;
+      }
+    }
+    // momentum still strongly in favor at the doorstep of the target → let it run
+    if ((pos.ext || 0) < 2 && dirScore >= cfg.strongTh && Math.abs(cur - pos.target) <= 0.5 * atr) {
+      pos.target = pos.target + pos.dir * atr;
+      pos.ext = (pos.ext || 0) + 1;
+      pos.mng = "running";
+      changed = true;
+      journalNote(pos, "Extended the target +1×ATR on " + pos.asset + " " + pos.tf + " — momentum is still strongly in favor and the trailing stop protects the gain.");
+    }
+  }
+  if (changed) {
+    savePositions(positions);
+    if (state.lastResults && !state.editingId) renderPositions(state.lastResults);
+    if (closedAny && state.lastPlan) renderPlanActions(ASSETS.find(a => a.id === state.lastPlan.assetId), state.lastPlan.plan);
+  }
 }
 
 const AI_START = 100;   // the AI's own bankroll, separate from your account
@@ -2143,7 +2269,7 @@ function autoPilotExecute(decisions) {
     positions.push({
       id: "p" + Date.now() + Math.random().toString(36).slice(2, 6),
       asset: d.asset.id, tf: d.tf, dir: d.dir, entry: d.entry, stop: d.stop, target: d.target,
-      qty, lev, liq: liqPrice(d.entry, d.dir, lev), riskAmt: qty * d.stopDist, stopDist: d.stopDist,
+      qty, lev, liq: liqPrice(d.entry, d.dir, lev), riskAmt: qty * d.stopDist, stopDist: d.stopDist, stopDist0: d.stopDist,
       invested, conviction: d.conviction, riskPctUsed: riskPct, rationale: d.rationale,
       openedAt: Date.now(), status: "open", placedBy: "AI", live: true,
     });
@@ -2181,7 +2307,7 @@ function renderAiBoard() {
     (ai.equity < 10 ? " — DEPLETED: use 'Clear closed trades' in the Portfolio to restart it at $100" : "");
 
   // running performance log (journal + permanent ledger — survives list clears and restarts)
-  const aiTrades = loadJournal().filter(e => e.by === "AI");
+  const aiTrades = loadJournal().filter(e => e.by === "AI" && e.result !== "note");
   const aiWins = aiTrades.filter(e => e.pnl > 0).length;
   const netR = aiTrades.reduce((s, e) => s + (isFinite(e.r) ? e.r : 0), 0);
   $("aiPerf").textContent = "Performance log: " + aiTrades.length + " closed AI trade" + (aiTrades.length === 1 ? "" : "s") +
@@ -2198,9 +2324,12 @@ function renderAiBoard() {
       const item = el("div", "journal-item");
       item.appendChild(el("span", "journal-when", agoTxt(e.t)));
       item.appendChild(document.createTextNode((e.by === "AI" ? "🤖 " : "👤 ") + e.asset + " " + e.tf + " " + (e.dir > 0 ? "LONG" : "SHORT") + " · "));
-      const rSpan = el("span", "journal-r " + (e.pnl > 0 ? "win" : "loss"),
-        (e.result === "tp" ? "TARGET HIT " : e.result === "sl" ? "STOPPED " : e.result === "liq" ? "LIQUIDATED " : "CLOSED ") +
-        (e.r >= 0 ? "+" : "") + (isFinite(e.r) ? e.r.toFixed(2) : "0.00") + "R");
+      const isNote = e.result === "note";
+      const rSpan = el("span", "journal-r" + (isNote ? "" : " " + (e.pnl > 0 ? "win" : "loss")),
+        isNote ? "MANAGED"
+               : (e.result === "tp" ? "TARGET HIT " : e.result === "sl" ? "STOPPED " : e.result === "liq" ? "LIQUIDATED "
+                  : e.result === "early" ? "BANKED EARLY " : e.result === "cut" ? "CUT EARLY " : "CLOSED ") +
+                 (e.r >= 0 ? "+" : "") + (isFinite(e.r) ? e.r.toFixed(2) : "0.00") + "R");
       item.appendChild(rSpan);
       item.appendChild(document.createTextNode(" — " + e.lesson));
       jbox.appendChild(item);
@@ -2421,7 +2550,9 @@ function renderPositions(results) {
       tgtTd.appendChild(tgtInp);
       tr.appendChild(tgtTd);
     } else {
-      tr.appendChild(el("td", "num", fmtPrice(p.stop)));
+      const stopTd = el("td", "num", fmtPrice(p.stop));
+      if (isOpen && p.mng) stopTd.appendChild(el("span", "pnl-sub", p.mng));
+      tr.appendChild(stopTd);
       tr.appendChild(el("td", "num", fmtPrice(p.target)));
     }
 
@@ -2447,7 +2578,8 @@ function renderPositions(results) {
     const stTd = el("td");
     const chip = el("span", "pos-chip " + (isOpen ? (pnl >= 0 ? "win" : "loss") : (p.pnl > 0 ? "win" : "loss")),
       isOpen ? (pnl >= 0 ? "OPEN ▲ PROFIT" : "OPEN ▼ LOSS")
-             : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : p.result === "liq" ? "LIQUIDATED" : "CLOSED");
+             : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : p.result === "liq" ? "LIQUIDATED"
+             : p.result === "early" ? "BANKED EARLY" : p.result === "cut" ? "CUT EARLY" : "CLOSED");
     stTd.appendChild(chip);
     tr.appendChild(stTd);
 
@@ -2823,8 +2955,8 @@ async function refresh(hard) {
     }
     $("offlineBanner").classList.add("hidden");
     const { asset, entry, an } = sel;
-    const plan = tradePlan(an, state.tf, state.capital, state.riskPct);
     const levels = swingLevels(entry.candles);
+    const plan = tradePlan(an, state.tf, state.capital, state.riskPct, entry.candles);
     state.lastPlan = { assetId: asset.id, tf: state.tf, plan, an };
     state.lastResults = results;
 

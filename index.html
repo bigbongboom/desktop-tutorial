@@ -444,7 +444,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, using leverage up to <strong>each market's real exchange maximum</strong> (read live from Hyperliquid — e.g. 40× BTC) while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It then deploys <strong>3% of its capital at 50% confidence up to 15% at 95%</strong>, using leverage up to <strong>each market's real exchange maximum</strong> (read live from Hyperliquid — e.g. 40× BTC) while the loss-if-stopped stays inside a strict 1–2% band with a minimum 1:2 reward:risk, and never places a ticket under $8 notional — exchange fees eat anything smaller. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -614,6 +614,7 @@ const TIMEFRAMES = {
 const CANDLES = 400;          // fetched (indicator warm-up)
 const SHOWN = 120;            // rendered
 const REFRESH_MS = 60_000;
+const MIN_NOTIONAL = 8;       // exchange fees make smaller tickets pointless
 
 const state = {
   asset: "BTC",
@@ -1876,6 +1877,8 @@ function validateTicket(plan, t) {
     if (!(t.target < entry)) errs.push("For a SHORT the target must sit below the entry.");
   }
   const notional = t.qty * entry;
+  if (t.qty > 0 && notional < MIN_NOTIONAL)
+    errs.push("Minimum trade size is " + fmtMoney(MIN_NOTIONAL) + " notional (yours: " + fmtMoney(notional) + ") — exchange fees eat anything smaller.");
   const maxNotional = state.capital * t.lev;
   if (notional > maxNotional * 1.005)   // small tolerance so the engine's own cap-rounded size never trips it
     errs.push("This size needs " + (notional / state.capital).toFixed(1) + "× your capital — raise the leverage or cut the size (max at " +
@@ -2263,6 +2266,14 @@ function autoPilotExecute(decisions) {
     let notional = qty * d.entry;
     const maxNotional = investedCap * mLev;           // confidence-scaled margin at up to the exchange max
     if (notional > maxNotional) { notional = maxNotional; qty = notional / d.entry; }
+    // fee floor: bump tiny tickets up to the $8 minimum when the extra risk is
+    // still safe (≤3% of equity); otherwise the trade isn't worth its fees — skip
+    if (notional < MIN_NOTIONAL) {
+      const bumpedRisk = (MIN_NOTIONAL / d.entry) * d.stopDist;
+      if (bumpedRisk > equity * 0.03 || MIN_NOTIONAL > maxNotional) continue;
+      notional = MIN_NOTIONAL;
+      qty = notional / d.entry;
+    }
     const lev = Math.max(1, Math.min(mLev, Math.ceil(notional / investedCap)));
     const invested = notional / lev;
     investedSoFar += invested;

@@ -241,6 +241,9 @@
   .journal-r { font-weight: 700; }
   .journal-r.win { color: var(--status-good); }
   .journal-r.loss { color: var(--status-critical); }
+  ol.xray { padding-left: 22px; }
+  ol.xray li { font-size: 12.5px; color: var(--text-secondary); padding: 5px 0; line-height: 1.55; }
+  ol.xray strong { color: var(--text-primary); }
 
   /* ---------- view navigation ---------- */
   .view-nav { display: flex; gap: 8px; margin: 0 0 16px; }
@@ -519,6 +522,13 @@
       <thead><tr><th>Signal</th><th>Reading</th><th>Verdict</th><th class="num">Points</th></tr></thead>
       <tbody></tbody>
     </table></div>
+  </section>
+
+  <!-- analysis x-ray -->
+  <section class="card">
+    <h2>🔬 How the AI analyzed this chart — the full pipeline, live</h2>
+    <p class="sub" id="xraySub"></p>
+    <ol class="xray" id="xrayList"></ol>
   </section>
 
   <!-- backtest -->
@@ -1171,6 +1181,34 @@ function tvRating(candles) {
   return { score, label, buy, sell, total };
 }
 
+/* Entry quality — the DON'T-CHASE check, shared by the scanner and the X-ray. */
+function entryQuality(an, candles, dir) {
+  const li = an.rsi.length - 1;
+  const rsiNow = an.rsi[li];
+  const pbNow = (an.bb.upper[li] != null && an.bb.upper[li] !== an.bb.lower[li])
+    ? (an.price - an.bb.lower[li]) / (an.bb.upper[li] - an.bb.lower[li]) : 0.5;
+  const e20Now = an.e20[li];
+  const distE20 = (e20Now != null && an.atrNow > 0) ? (an.price - e20Now) / an.atrNow : 0;
+  let hi20 = -Infinity, lo20 = Infinity;
+  for (let k = Math.max(0, candles.length - 21); k < candles.length - 1; k++) {
+    hi20 = Math.max(hi20, candles[k].h);
+    lo20 = Math.min(lo20, candles[k].l);
+  }
+  const prevClose = candles.length > 1 ? candles[candles.length - 2].c : an.price;
+  const freshBreak = dir > 0 ? (an.price > hi20 && prevClose <= hi20) : (an.price < lo20 && prevClose >= lo20);
+  let chase = null;
+  if (dir > 0) {
+    if (rsiNow != null && rsiNow > 72) chase = "RSI " + rsiNow.toFixed(0) + " overbought — late in the move";
+    else if (distE20 > 2) chase = distE20.toFixed(1) + "×ATR above EMA20 — extended, wait for the pullback";
+    else if (pbNow > 0.92 && !freshBreak) chase = "pressing the top band without a fresh breakout";
+  } else {
+    if (rsiNow != null && rsiNow < 28) chase = "RSI " + rsiNow.toFixed(0) + " oversold — late in the move";
+    else if (distE20 < -2) chase = (-distE20).toFixed(1) + "×ATR below EMA20 — extended, wait for the bounce";
+    else if (pbNow < 0.08 && !freshBreak) chase = "pressing the bottom band without a fresh breakdown";
+  }
+  return { chase, distE20, freshBreak };
+}
+
 /* Regime read from an analysis: how strongly is this chart actually trending? */
 function regimeOf(an) {
   const li = an.e20.length - 1;
@@ -1238,7 +1276,8 @@ function backtest(candles) {
       else if (hitTgt) { exit = pos.target; result = "tp"; }
       else if (i - pos.openIdx >= pos.maxBars) { exit = c.c; result = "time"; }
       if (exit != null) {
-        trades.push({ r: pos.dir * (exit - pos.entry) / pos.riskDist, t: c.t, result });
+        trades.push({ r: pos.dir * (exit - pos.entry) / pos.riskDist, t: c.t, result,
+                      openT: pos.openT, entry: pos.entry, exit, dir: pos.dir });
         pos = null;
       }
       continue;
@@ -1254,7 +1293,7 @@ function backtest(candles) {
     const entry = candles[i + 1].o;
     const stopDist = cfg.stopMult * atrNow, tgtDist = (strong ? cfg.tgtMult + 1 : cfg.tgtMult) * atrNow;
     pos = { dir, entry, stop: entry - dir * stopDist, target: entry + dir * tgtDist,
-            riskDist: stopDist, openIdx: i + 1,
+            riskDist: stopDist, openIdx: i + 1, openT: candles[i + 1].t,
             maxBars: Math.ceil((tgtDist / (0.65 * atrNow)) * 1.7) };
   }
   const n = trades.length;
@@ -1679,6 +1718,21 @@ function renderChart(container, tooltipNode, cfg) {
     if (!d) continue;
     const attrs = { d, fill: "none", stroke: s.color, "stroke-width": s.width || 2, "stroke-linejoin": "round", "stroke-linecap": "round" };
     svg.appendChild(svgEl("path", attrs));
+  }
+
+  // replay markers — where the strategy actually fired on this chart's history
+  for (const mk of cfg.markers || []) {
+    const mx = x(mk.idx), my = y(mk.y);
+    if (mk.kind === "entry") {
+      const up = mk.dir > 0;
+      const oy = up ? my + 10 : my - 10;
+      const pts = up
+        ? mx.toFixed(1) + "," + (oy - 6).toFixed(1) + " " + (mx - 4.5).toFixed(1) + "," + (oy + 2).toFixed(1) + " " + (mx + 4.5).toFixed(1) + "," + (oy + 2).toFixed(1)
+        : mx.toFixed(1) + "," + (oy + 6).toFixed(1) + " " + (mx - 4.5).toFixed(1) + "," + (oy - 2).toFixed(1) + " " + (mx + 4.5).toFixed(1) + "," + (oy - 2).toFixed(1);
+      svg.appendChild(svgEl("polygon", { points: pts, fill: up ? getCss("--status-good") : getCss("--status-critical"), stroke: getCss("--surface-1"), "stroke-width": 1 }));
+    } else {
+      svg.appendChild(svgEl("circle", { cx: mx.toFixed(1), cy: my.toFixed(1), r: 3.5, fill: mk.win ? getCss("--status-good") : getCss("--status-critical"), stroke: getCss("--surface-1"), "stroke-width": 1.5 }));
+    }
   }
 
   // selective direct label: the last price (candle mode) or first series endpoint
@@ -2178,31 +2232,15 @@ async function aiScanAndTrade() {
     const learn = learnAdjust(sc.asset.id, sc.tf, dir);
     rank += learn.adj;
 
-    // DON'T-CHASE gate: never enter an already-exhausted move. Longs are blocked
-    // when RSI is overbought, price is stretched >2×ATR above its mean, or it's
-    // pressing the top band without a FRESH breakout — pullbacks are the entries.
-    const liC = sc.an.rsi.length - 1;
-    const rsiNow = sc.an.rsi[liC];
-    const pbNow = (sc.an.bb.upper[liC] != null && sc.an.bb.upper[liC] !== sc.an.bb.lower[liC])
-      ? (sc.an.price - sc.an.bb.lower[liC]) / (sc.an.bb.upper[liC] - sc.an.bb.lower[liC]) : 0.5;
-    const e20Now = sc.an.e20[liC];
-    const distE20 = (e20Now != null && sc.an.atrNow > 0) ? (sc.an.price - e20Now) / sc.an.atrNow : 0;
-    const cs = sc.candles;
-    let hi20 = -Infinity, lo20 = Infinity;
-    for (let k = Math.max(0, cs.length - 21); k < cs.length - 1; k++) { hi20 = Math.max(hi20, cs[k].h); lo20 = Math.min(lo20, cs[k].l); }
-    const prevClose = cs.length > 1 ? cs[cs.length - 2].c : sc.an.price;
-    const freshBreak = dir > 0 ? (sc.an.price > hi20 && prevClose <= hi20) : (sc.an.price < lo20 && prevClose >= lo20);
-    let chase = null;
-    if (dir > 0) {
-      if (rsiNow != null && rsiNow > 72) chase = "RSI " + rsiNow.toFixed(0) + " overbought — late in the move";
-      else if (distE20 > 2) chase = distE20.toFixed(1) + "×ATR above EMA20 — extended, wait for the pullback";
-      else if (pbNow > 0.92 && !freshBreak) chase = "pressing the top band without a fresh breakout";
-    } else {
-      if (rsiNow != null && rsiNow < 28) chase = "RSI " + rsiNow.toFixed(0) + " oversold — late in the move";
-      else if (distE20 < -2) chase = (-distE20).toFixed(1) + "×ATR below EMA20 — extended, wait for the bounce";
-      else if (pbNow < 0.08 && !freshBreak) chase = "pressing the bottom band without a fresh breakdown";
-    }
+    // DON'T-CHASE gate: never enter an already-exhausted move — pullbacks are the entries
+    const eq = entryQuality(sc.an, sc.candles, dir);
+    const chase = eq.chase, distE20 = eq.distE20;
     if (chase) rank -= 12;
+
+    // volatility targeting (Moreira–Muir): calm charts size up, wild ones size down
+    const atrValid = sc.an.atrArr.filter(v => v != null).slice(-100);
+    const avgAtr = atrValid.length ? atrValid.reduce((a, b) => a + b, 0) / atrValid.length : sc.an.atrNow;
+    const volFactor = clamp(avgAtr / Math.max(sc.an.atrNow, 1e-9), 0.6, 1.4);
 
     // TradingView-style consensus rating feeds confidence (±12)
     const tv = tvRating(sc.candles);
@@ -2250,7 +2288,7 @@ async function aiScanAndTrade() {
       .slice(0, 2).map(c => c.name).join(", ");
     const rationale = sc.an.label + " (" + (sc.an.score > 0 ? "+" : "") + sc.an.score + ") · " +
       agree + " other TF" + (agree === 1 ? "" : "s") + " aligned · drivers: " + (drivers || "mixed") +
-      " · regime: " + regime +
+      " · regime: " + regime + " (vol-target ×" + volFactor.toFixed(2) + ")" +
       " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
       " · entry quality: " + (chase ? "DON'T CHASE — " + chase : "good (" + Math.abs(distE20).toFixed(1) + "×ATR from EMA20)") +
       " · exits: " + exits.note + extTxt + " · " + convDetail;
@@ -2258,7 +2296,7 @@ async function aiScanAndTrade() {
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction, rank, entry: sc.an.price,
       stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
-      stopDist, regime, rationale, chase, sim: sc.source === "Simulated",
+      stopDist, regime, rationale, chase, volFactor, sim: sc.source === "Simulated",
     });
   }
   decisions.sort((a, b) => b.rank - a.rank);
@@ -2395,8 +2433,9 @@ function autoPilotExecute(decisions) {
     const minBet = equity * 0.10;
     const deployLeft = equity * 0.80 - investedSoFar;
     let invested = equity * (0.10 + confNorm * 0.30);
-    if (d.regime === "chop") invested = Math.max(minBet, invested * 0.6);
-    invested = Math.min(invested, deployLeft, available);
+    invested *= d.volFactor || 1;                     // volatility targeting: constant-risk exposure, not constant notional
+    if (d.regime === "chop") invested *= 0.6;
+    invested = Math.min(Math.max(invested, minBet), equity * 0.40, deployLeft, available);
     if (invested < minBet - 1e-9) continue;           // can't place a full-size bet — stand aside
     const mLev = maxLevFor(d.asset.id);               // this market's real exchange maximum
     const stopPct = d.stopDist / d.entry;
@@ -2807,6 +2846,60 @@ function renderPositions(results) {
   }
 }
 
+/* ---------- analysis X-ray: the full pipeline on the selected chart, live ---------- */
+function renderXray(asset, an, candles, plan, source, levels) {
+  $("xraySub").textContent = asset.name + " · " + TIMEFRAMES[state.tf].label +
+    " chart · every step below is computed live from " + candles.length + " real candles (" + source +
+    ") right now — hover any AI decision row for the same math on other charts.";
+  const list = $("xrayList");
+  clear(list);
+  const li = (head, body) => {
+    const item = el("li");
+    item.appendChild(el("strong", "", head + " — "));
+    item.appendChild(document.createTextNode(body));
+    list.appendChild(item);
+  };
+  const regime = regimeOf(an);
+  const liIdx = an.e20.length - 1;
+  const spread = (an.e20[liIdx] != null && an.e50[liIdx] != null && an.atrNow > 0)
+    ? Math.abs(an.e20[liIdx] - an.e50[liIdx]) / an.atrNow : 0;
+  li("Regime", "EMA20–EMA50 spread = " + spread.toFixed(2) + "×ATR → " + regime.toUpperCase() +
+    (regime === "trend" ? ". Trend-following mode at full size — time-series momentum is crypto's best-documented edge."
+     : regime === "chop" ? ". Chop: STRONG signals only at defensive size — trend rules lose money in chop, so standing aside IS the strategy."
+     : ". Mixed: tradeable but at reduced size."));
+  li("14-signal engine", "composite score " + (an.score > 0 ? "+" : "") + an.score + " → " + an.label +
+    " · " + an.bulls + " bullish vs " + an.bears + " bearish components — each one's reading and points are in the Signal breakdown above.");
+  if (state.tvSel && state.tvSel.assetId === asset.id) {
+    const tv = state.tvSel;
+    li("TradingView-style consensus", tv.label + " — " + tv.buy + " buy / " + tv.sell + " sell of " + tv.total +
+      " indicators (price vs 12 moving averages + RSI, Stochastic, MACD, Momentum, CCI-20, Williams %R), feeding ±12 into confidence.");
+  }
+  li("Structure", (levels.sup != null ? "swing support " + fmtPrice(levels.sup) : "no swing support in range") + " · " +
+    (levels.res != null ? "swing resistance " + fmtPrice(levels.res) : "no swing resistance in range") +
+    " → exits: " + plan.exitNote + ".");
+  const cb = state.btCache.get(asset.id + ":" + state.tf);
+  if (cb && cb.bt.stats.n) {
+    li("Whole-chart replay", cb.bt.stats.n + " trades replayed over " + cb.bt.barsTested + " bars with zero lookahead → " +
+      cb.bt.stats.winRate.toFixed(0) + "% win, " + (cb.bt.stats.avgR >= 0 ? "+" : "") + cb.bt.stats.avgR.toFixed(2) +
+      "R average. Those are the ▲▼ entries and ● exits drawn on the candles above — and this record feeds confidence.");
+  }
+  const dir = plan.dir || (an.score >= 0 ? 1 : -1);
+  const eq = entryQuality(an, candles, dir);
+  li("Entry quality (anti-chase)", eq.chase
+    ? "BLOCKED — " + eq.chase + ". The bot waits for the pullback instead of buying the peak."
+    : "GOOD — price is " + Math.abs(eq.distE20).toFixed(1) + "×ATR from EMA20" + (eq.freshBreak ? " on a fresh breakout" : "") + "; not extended.");
+  const learn = learnAdjust(asset.id, state.tf, dir);
+  li("Lessons", learn.n
+    ? "this exact setup is " + learn.wins + "W/" + (learn.n - learn.wins) + "L in the journal → rank " + (learn.adj >= 0 ? "+" : "") + learn.adj + "."
+    : "no prior closed trades on this exact setup — neutral until the journal has data.");
+  const d = (state.lastDecisions || []).find(x => x.asset.id === asset.id && x.tf === state.tf);
+  li("Decision & confidence", d
+    ? d.label + " at " + d.conviction + "% measured confidence — hover this chart's row in the AI board for the full arithmetic."
+    : "no trade candidate on this chart right now (score inside the neutral band, below your trigger, or gated) — waiting is a position.");
+  li("Sizing (volatility-targeted)", "bets scale 10%→40% of the AI's equity with confidence, multiplied by a volatility factor (calm charts size up, wild ones down — the documented Sharpe improver), ≤80% of the portfolio deployed at once; leverage is then solved so a stop-out costs 2–4% of equity (6% ceiling).");
+  li("Live management", "breakeven lock at +1R · 1.6×ATR trail past +1.5R · target extends while momentum stays STRONG · profit banked early when belief fades · instant cut if the signal flips · stops never widen.");
+}
+
 /* ---------- backtest UI ---------- */
 const fmtR = (v) => (v >= 0 ? "+" : "") + v.toFixed(2) + " R";
 async function runBacktests() {
@@ -2969,8 +3062,27 @@ function renderCharts(asset, an, candles, levels, plan) {
   }
 
   if (styleCandles) {
+    // the strategy's replay on this exact chart → ▲▼ entries and ● exits, on the candles
+    const bKey = asset.id + ":" + state.tf;
+    let cb = state.btCache.get(bKey);
+    const lastT = candles[candles.length - 1].t;
+    if (!cb || cb.lastT !== lastT) {
+      cb = { lastT, bt: backtest(candles) };
+      state.btCache.set(bKey, cb);
+    }
+    const markers = [];
+    for (const tr of cb.bt.trades) {
+      const iO = times.findIndex(t => t >= tr.openT);
+      if (iO >= 0) markers.push({ idx: iO, y: tr.entry, dir: tr.dir, kind: "entry" });
+      const iX = times.findIndex(t => t >= tr.t);
+      if (iX >= 0) markers.push({ idx: iX, y: tr.exit, dir: tr.dir, kind: "exit", win: tr.r > 0 });
+    }
+    if (markers.length) {
+      legItem("▲▼ engine entries — exactly where the strategy fired (replay)", getCss("--series-3"), true);
+      legItem("● exits (green won, red lost)", getCss("--text-muted"), true);
+    }
     renderChart($("priceChart"), $("priceTip"), {
-      times, tf: state.tf, height: 320, yRefs: priceRefs, position: posCfg,
+      times, tf: state.tf, height: 320, yRefs: priceRefs, position: posCfg, markers,
       candlesData: shownCandles,
       priceTag: shownCandles.length ? shownCandles[shownCandles.length - 1].c : null,
       series: [
@@ -3137,6 +3249,7 @@ async function refresh(hard) {
     if (!state.editingId) renderPositions(results);   // don't wipe an in-progress row edit
     renderCharts(asset, an, entry.candles, levels, plan);
     renderBreakdown(an);
+    renderXray(asset, an, entry.candles, plan, entry.source, levels);
     renderDataTable(asset, an, entry.candles);
     // context feeds and the AI sweep render independently — a dead feed never blocks the signals
     refreshPulse(asset).catch(() => {});

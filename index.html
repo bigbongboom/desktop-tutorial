@@ -452,7 +452,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It bets <strong>10% of its capital minimum, scaling to 40% at max confidence, with up to 80% of the portfolio deployed at once</strong> — leverage is solved mathematically per trade (up to each market's real exchange maximum, e.g. 40× BTC) so the loss-if-stopped lands at 2–4% of equity (6% hard ceiling). Fee-efficient by design: no dust tickets, ever. <strong>It refuses to chase:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. After any close it stands down on that coin (~3 bars; 3× longer after losses) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It bets <strong>10% of its capital minimum, scaling to 40% at max confidence, with up to 80% of the portfolio deployed at once</strong> — leverage is solved mathematically per trade (up to each market's real exchange maximum, e.g. 40× BTC) so the loss-if-stopped lands at 2–4% of equity (6% hard ceiling). Fee-efficient by design: no dust tickets, ever. <strong>It refuses to chase and never snap-trades:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. Every new setup must <strong>survive two consecutive scans still qualifying</strong> before any trade is placed (you'll see "analysing — confirmation 1/2" on the board), and after any close it stands down on that coin for 4+ bars (minimum 45 minutes, 3× longer after losses or manual closes) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -2302,6 +2302,7 @@ async function aiScanAndTrade() {
   decisions.sort((a, b) => b.rank - a.rank);
   state.lastDecisions = decisions.slice(0, 8);
   state.scannedCount = valid.length;
+  state.scanSeq = (state.scanSeq || 0) + 1;   // confirmation clock: one tick per full scan
   manageAiPositions(valid);
   if (state.autoPilot) autoPilotExecute(state.lastDecisions);
   renderAiBoard();
@@ -2402,7 +2403,7 @@ function inCooldown(assetId, tf) {
     if (j[k].asset === assetId && j[k].result !== "note") { e = j[k]; break; }
   }
   if (!e) return false;
-  const base = Math.max(3 * TIMEFRAMES[tf].minutes * 60_000, 30 * 60_000);
+  const base = Math.max(4 * TIMEFRAMES[tf].minutes * 60_000, 45 * 60_000);
   const mult = (e.result === "tp" || e.result === "early") ? 1 : 3;
   return Date.now() - e.t < base * mult;
 }
@@ -2425,6 +2426,22 @@ function autoPilotExecute(decisions) {
     if (inCooldown(d.asset.id, d.tf)) continue;       // no instant re-entry after a close
     // defensive in chop: only STRONG signals qualify
     if (d.regime === "chop" && Math.abs(d.score) < cfg.strongTh) continue;
+
+    // CONFIRMATION: never trade on first sight. The setup must survive a full
+    // re-scan (fresh prices, all gates re-checked) before any money moves.
+    const seq = state.scanSeq || 0;
+    state.pendingEntries = state.pendingEntries || {};
+    const pKey = d.asset.id + ":" + d.tf + ":" + (d.dir > 0 ? "L" : "S");
+    const pend = state.pendingEntries[pKey];
+    if (!pend || seq - pend.lastSeq > 1) {            // new setup, or it lapsed — start confirming
+      state.pendingEntries[pKey] = { n: 1, lastSeq: seq };
+      continue;
+    }
+    if (pend.lastSeq === seq) continue;               // already counted this scan
+    pend.n++;
+    pend.lastSeq = seq;
+    if (pend.n < 2) continue;
+    delete state.pendingEntries[pKey];                // confirmed on consecutive scans — trade it
     const available = equity - investedSoFar;         // free cash — the AI can't spend money it doesn't have
 
     // ---- fee-efficient conviction sizing: bets are 10% → 40% of equity, total
@@ -2539,6 +2556,8 @@ function renderAiBoard() {
     vc.appendChild(el("span", "dot"));
     vc.appendChild(el("span", "", d.label));
     dtd.appendChild(vc);
+    const pend = state.pendingEntries && state.pendingEntries[d.asset.id + ":" + d.tf + ":" + (d.dir > 0 ? "L" : "S")];
+    if (state.autoPilot && pend) dtd.appendChild(el("span", "pnl-sub", "analysing — confirmation " + pend.n + "/2 scans"));
     tr.appendChild(dtd);
     tr.appendChild(el("td", "num", (d.score > 0 ? "+" : "") + d.score));
     tr.appendChild(el("td", "num", d.conviction + "%"));

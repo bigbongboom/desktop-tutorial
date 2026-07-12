@@ -109,6 +109,9 @@
   .tf-group button.active { background: var(--accent-soft); color: var(--text-primary); }
   .tf-group.mini { margin-bottom: 10px; }
   .tf-group.mini button { padding: 5px 11px; font-size: 11.5px; }
+  .tv-holder { width: 100%; height: 460px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+  .tv-holder iframe { width: 100% !important; height: 100% !important; border: 0; }
+  .tv-fallback { display: flex; align-items: center; justify-content: center; height: 100%; padding: 20px; text-align: center; font-size: 13px; color: var(--text-secondary); }
   .filters label { font-size: 12px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
   .filters input, .filters select {
     font: inherit; font-size: 12.5px; padding: 6px 9px; border-radius: 8px;
@@ -417,6 +420,12 @@
           <option value="5">5.0 ×ATR — moonshot</option>
         </select>
       </label>
+      <label>AI exit style
+        <select id="cfgExit">
+          <option value="smart">Diamond hands — hold &amp; re-analyze at the stop</option>
+          <option value="hard">Hard stops — classic, always honored</option>
+        </select>
+      </label>
       <label>External predictor URL
         <input id="cfgPredictor" type="url" placeholder="http://localhost:8910" spellcheck="false">
       </label>
@@ -452,7 +461,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It bets <strong>10% of its capital minimum, scaling to 40% at max confidence, with up to 80% of the portfolio deployed at once</strong> — leverage is solved mathematically per trade (up to each market's real exchange maximum, e.g. 40× BTC) so the loss-if-stopped lands at 2–4% of equity (6% hard ceiling). Fee-efficient by design: no dust tickets, ever. <strong>It refuses to chase and never snap-trades:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. Every new setup must <strong>survive two consecutive scans still qualifying</strong> before any trade is placed (you'll see "analysing — confirmation 1/2" on the board), and after any close it stands down on that coin for 4+ bars (minimum 45 minutes, 3× longer after losses or manual closes) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It sizes every bet by the <strong>Kelly criterion</strong> — once it has 8+ closed trades it computes its own measured edge (win rate and payoff ratio) and commits the mathematically optimal fraction (half-Kelly for safety), <strong>10% to 80% of the fund, its own call</strong> — volatility-scaled, with leverage solved so liquidation stays ≥4×ATR away. <strong>Diamond hands (default):</strong> the stop is a decision point, not an auto-exit — if price hits the stop while the engine still reads the same direction, it holds rather than realizing the loss, buys the low once to average down, and only closes when the signal genuinely flips or an emergency exit before liquidation (the true floor). Switch to Hard stops in Engine settings for classic behavior. <strong>It refuses to chase and never snap-trades:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. Every new setup must <strong>survive two consecutive scans still qualifying</strong> before any trade is placed (you'll see "analysing — confirmation 1/2" on the board), and after any close it stands down on that coin for 4+ bars (minimum 45 minutes, 3× longer after losses or manual closes) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -491,10 +500,12 @@
     <h2 id="priceTitle">Live trading view</h2>
     <p class="sub">Candlesticks with the position overlay — green zone runs from entry to take-profit, red zone from entry to stop-loss, like a TradingView position tool. It shows your open paper trade when you have one, otherwise the engine's planned trade. Pick 1m above for scalping resolution.</p>
     <div class="tf-group mini" id="styleGroup" role="group" aria-label="Chart style">
-      <button type="button" data-cs="candles" class="active">Candles</button>
+      <button type="button" data-cs="tv" class="active">TradingView</button>
+      <button type="button" data-cs="candles">Candles + engine markers</button>
       <button type="button" data-cs="line">Line + indicators</button>
     </div>
     <div class="legend" id="priceLegend"></div>
+    <div id="tvChart" class="tv-holder hidden"></div>
     <div id="priceChart"></div>
     <div class="tooltip" id="priceTip"></div>
   </section>
@@ -607,11 +618,12 @@
    Configuration
    ============================================================ */
 const ASSETS = [
-  { id: "BTC",  name: "Bitcoin",     binance: "BTCUSDT",  okx: "BTC-USDT",  hl: "BTC",  maxLev: 40 },
-  { id: "ETH",  name: "Ethereum",    binance: "ETHUSDT",  okx: "ETH-USDT",  hl: "ETH",  maxLev: 25 },
-  { id: "SOL",  name: "Solana",      binance: "SOLUSDT",  okx: "SOL-USDT",  hl: "SOL",  maxLev: 20 },
-  { id: "HYPE", name: "Hyperliquid", binance: "HYPEUSDT", okx: "HYPE-USDT", hl: "HYPE", maxLev: 5 },
+  { id: "BTC",  name: "Bitcoin",     binance: "BTCUSDT",  okx: "BTC-USDT",  hl: "BTC",  maxLev: 40, tv: "BINANCE:BTCUSDT" },
+  { id: "ETH",  name: "Ethereum",    binance: "ETHUSDT",  okx: "ETH-USDT",  hl: "ETH",  maxLev: 25, tv: "BINANCE:ETHUSDT" },
+  { id: "SOL",  name: "Solana",      binance: "SOLUSDT",  okx: "SOL-USDT",  hl: "SOL",  maxLev: 20, tv: "BINANCE:SOLUSDT" },
+  { id: "HYPE", name: "Hyperliquid", binance: "HYPEUSDT", okx: "HYPE-USDT", hl: "HYPE", maxLev: 5,  tv: "BYBIT:HYPEUSDT" },
 ];
+const TV_INTERVAL = { "1m": "1", "15m": "15", "1h": "60", "4h": "240", "1d": "D" };
 /* Per-market maximum leverage: live from Hyperliquid's exchange metadata when
    available, falling back to the static values above. */
 function maxLevFor(assetId) {
@@ -652,14 +664,14 @@ const state = {
 
 /* Engine settings — every knob customizable, persisted, and honored by the
    verdict labels, trade plan, tickets, alerts AND the backtester. */
-const CFG_DEFAULTS = { enterTh: 18, strongTh: 45, stopMult: 1.5, tgtMult: 2.5, trigger: "strong", predictorUrl: "" };
+const CFG_DEFAULTS = { enterTh: 18, strongTh: 45, stopMult: 1.5, tgtMult: 2.5, trigger: "strong", predictorUrl: "", exitStyle: "smart" };
 function loadCfg() {
   try { return { ...CFG_DEFAULTS, ...JSON.parse(localStorage.getItem("csd_cfg") || "{}") }; }
   catch (_) { return { ...CFG_DEFAULTS }; }
 }
 function saveCfg() { try { localStorage.setItem("csd_cfg", JSON.stringify(state.cfg)); } catch (_) {} }
 state.cfg = loadCfg();
-state.chartStyle = (() => { try { return localStorage.getItem("csd_style") === "line" ? "line" : "candles"; } catch (_) { return "candles"; } })();
+state.chartStyle = (() => { try { const s = localStorage.getItem("csd_style"); return (s === "line" || s === "candles" || s === "tv") ? s : "tv"; } catch (_) { return "tv"; } })();
 // ask the browser to protect this site's storage from eviction (best-effort)
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}
 
@@ -1528,19 +1540,25 @@ function settlePositions(results) {
     if (pos.status !== "open") continue;
     const res = results.find(r => r.asset.id === pos.asset);
     if (!res) continue;
+    // Diamond-hands: an AI position in smart mode does NOT auto-close at its stop
+    // during catch-up settlement — the stop is a decision point handled live, and
+    // liquidation is the true floor. It still settles at target or liquidation.
+    const diamond = pos.placedBy === "AI" && (pos.exitStyle || state.cfg.exitStyle) === "smart";
     for (const b of res.entry.candles) {
       if (b.t < pos.openedAt) continue;
       const hitStop = pos.dir > 0 ? b.l <= pos.stop : b.h >= pos.stop;
       const hitLiq = pos.liq != null && (pos.dir > 0 ? b.l <= pos.liq : b.h >= pos.liq);
       const hitTgt = pos.dir > 0 ? b.h >= pos.target : b.l <= pos.target;
-      if (hitStop || hitLiq || hitTgt) {
-        // whichever adverse level is closer to entry triggers first
-        const stopFirst = hitStop && (!hitLiq || Math.abs(pos.entry - pos.stop) <= Math.abs(pos.entry - pos.liq));
-        if (stopFirst) closePosition(pos, pos.stop, "sl", b.t);
-        else if (hitLiq) closePosition(pos, pos.liq, "liq", b.t);
-        else closePosition(pos, pos.target, "tp", b.t);
-        break;
+      if (hitLiq) { closePosition(pos, pos.liq, "liq", b.t); break; }
+      if (hitTgt && (!hitStop || pos.dir > 0 ? b.h >= pos.target : b.l <= pos.target)) {
+        // target reached; if the same bar also hit a loss-side stop, only honor
+        // the stop when we're NOT in diamond-hands mode
+        if (hitStop && !diamond && Math.abs(pos.entry - pos.stop) <= Math.abs(pos.entry - pos.target)) {
+          closePosition(pos, pos.stop, "sl", b.t); break;
+        }
+        closePosition(pos, pos.target, "tp", b.t); break;
       }
+      if (hitStop && !diamond) { closePosition(pos, pos.stop, "sl", b.t); break; }
     }
   }
   savePositions(positions);
@@ -2296,7 +2314,7 @@ async function aiScanAndTrade() {
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction, rank, entry: sc.an.price,
       stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
-      stopDist, regime, rationale, chase, volFactor, sim: sc.source === "Simulated",
+      stopDist, atrNow: sc.an.atrNow, regime, rationale, chase, volFactor, sim: sc.source === "Simulated",
     });
   }
   decisions.sort((a, b) => b.rank - a.rank);
@@ -2324,6 +2342,8 @@ function journalNote(pos, text) {
 function manageAiPositions(scans) {
   const cfg = state.cfg;
   const positions = loadPositions();
+  const stats = aiAccountStats(state.lastResults);
+  let freeCash = Math.max(0, stats.equity - stats.invested);
   let changed = false, closedAny = false;
   for (const pos of positions) {
     if (pos.status !== "open" || pos.placedBy !== "AI") continue;
@@ -2334,14 +2354,22 @@ function manageAiPositions(scans) {
     const base = pos.stopDist0 || pos.stopDist || Math.abs(pos.entry - pos.stop);
     const uR = base > 0 ? (pos.dir * (cur - pos.entry)) / base : 0;
     const dirScore = pos.dir * an.score;
+    const diamond = (pos.exitStyle || cfg.exitStyle) === "smart";
     pos.peak = pos.peak == null ? cur : (pos.dir > 0 ? Math.max(pos.peak, cur) : Math.min(pos.peak, cur));
 
-    // cut immediately: the engine has flipped confidently against the trade
-    if (dirScore <= -cfg.enterTh) {
-      closePosition(pos, cur, uR > 0 ? "early" : "cut");
-      changed = true; closedAny = true;
-      continue;
+    // ===== EMERGENCY: liquidation is the true floor — always protect it =====
+    if (pos.liq != null) {
+      const liqBuffer = 1.2 * atr;
+      const nearLiq = pos.dir > 0 ? cur <= pos.liq + liqBuffer : cur >= pos.liq - liqBuffer;
+      if (nearLiq) {
+        closePosition(pos, cur, "cut");
+        journalNote(pos, "EMERGENCY EXIT on " + pos.asset + " " + pos.tf + " — price approached the liquidation price " + fmtPrice(pos.liq) + "; closed to save the remaining margin. Liquidation is the only real floor.");
+        changed = true; closedAny = true;
+        continue;
+      }
     }
+
+    // ===== winning side: protect and let it run =====
     // bank real profit when the edge has faded — don't ride it back down
     if (uR >= 1.2 && dirScore <= 0) {
       closePosition(pos, cur, "early");
@@ -2354,24 +2382,66 @@ function manageAiPositions(scans) {
       pos.stop = pos.entry + pos.dir * 0.1 * atr;
       pos.mng = "breakeven";
       changed = true;
-      journalNote(pos, "Moved the stop to breakeven (+0.1×ATR) at +1R on " + pos.asset + " " + pos.tf + " — worst case is now a scratch.");
+      journalNote(pos, "Moved the stop to breakeven at +1R on " + pos.asset + " " + pos.tf + " — worst case is now a scratch.");
     }
     // trail 1.6×ATR behind the best price once past +1.5R (never backwards)
     if (uR >= 1.5) {
       const trail = pos.peak - pos.dir * 1.6 * atr;
-      if (pos.dir > 0 ? trail > pos.stop : trail < pos.stop) {
-        pos.stop = trail;
-        pos.mng = "trailing";
-        changed = true;
-      }
+      if (pos.dir > 0 ? trail > pos.stop : trail < pos.stop) { pos.stop = trail; pos.mng = "trailing"; changed = true; }
     }
-    // momentum still strongly in favor at the doorstep of the target → let it run
-    if ((pos.ext || 0) < 2 && dirScore >= cfg.strongTh && Math.abs(cur - pos.target) <= 0.5 * atr) {
+    // momentum still strong at the doorstep of the target → let it run
+    if ((pos.ext || 0) < 3 && dirScore >= cfg.strongTh && Math.abs(cur - pos.target) <= 0.5 * atr) {
       pos.target = pos.target + pos.dir * atr;
       pos.ext = (pos.ext || 0) + 1;
       pos.mng = "running";
       changed = true;
-      journalNote(pos, "Extended the target +1×ATR on " + pos.asset + " " + pos.tf + " — momentum is still strongly in favor and the trailing stop protects the gain.");
+      journalNote(pos, "Extended the target on " + pos.asset + " " + pos.tf + " — momentum still strongly in favor, trailing stop protects the gain.");
+    }
+
+    // ===== losing side =====
+    const flipped = dirScore <= -cfg.enterTh;            // engine confidently reversed
+    const atStop = pos.dir > 0 ? cur <= pos.stop : cur >= pos.stop;
+
+    if (!diamond) {
+      // classic: cut on a confirmed flip; stops settle via candle history
+      if (flipped) { closePosition(pos, cur, uR > 0 ? "early" : "cut"); changed = true; closedAny = true; }
+      continue;
+    }
+
+    // ----- DIAMOND HANDS -----
+    // The thesis breaks only when the engine flips; a mere stop touch does not
+    // force a loss. Hold if the signal is intact — but never past liquidation.
+    if (flipped) {
+      closePosition(pos, cur, uR > 0 ? "early" : "cut");
+      journalNote(pos, "Closed " + pos.asset + " " + pos.tf + " at " + (pos.dir * (cur - pos.entry) >= 0 ? "a profit" : "a loss") + " — the engine flipped against the position (score " + an.score + "); the reason to hold is gone, so the thesis is respected, not hope.");
+      changed = true; closedAny = true;
+      continue;
+    }
+    if (atStop && !pos.heldNote) {
+      pos.heldNote = true; pos.mng = "holding";
+      journalNote(pos, "HOLDING through the stop on " + pos.asset + " " + pos.tf + " — price hit " + fmtPrice(cur) + " but the engine still reads " + an.label + " (score " + an.score + "). Not realizing the loss while the signal is intact; liquidation " + fmtPrice(pos.liq) + " is the only hard floor.");
+      changed = true;
+    }
+    // BUY THE LOW — once, when deeply underwater but the signal holds and there's
+    // free capital. Averaging down improves the entry AND pushes liquidation away.
+    const deepUnder = uR <= -1.1;
+    if (diamond && deepUnder && !pos.addedLow && dirScore > 0 && freeCash > MIN_NOTIONAL) {
+      const addInvest = Math.min(pos.invested * 0.6, freeCash, stats.equity * 0.15);
+      if (addInvest >= MIN_NOTIONAL / (pos.lev || 1)) {
+        const addNotional = addInvest * (pos.lev || 1);
+        const addQty = addNotional / cur;
+        const newQty = pos.qty + addQty;
+        const newEntry = (pos.qty * pos.entry + addQty * cur) / newQty;
+        pos.entry = newEntry;
+        pos.qty = newQty;
+        pos.invested = (pos.invested || 0) + addInvest;
+        pos.addedLow = true;
+        pos.mng = "averaged down";
+        pos.liq = liqPrice(newEntry, pos.dir, pos.lev || 1);
+        freeCash -= addInvest;
+        journalNote(pos, "BOUGHT THE LOW on " + pos.asset + " " + pos.tf + " — added " + fmtMoney(addInvest) + " at " + fmtPrice(cur) + " while the signal still reads " + an.label + ". Average entry improved to " + fmtPrice(newEntry) + ", liquidation pushed to " + fmtPrice(pos.liq) + ". One add only.");
+        changed = true;
+      }
     }
   }
   if (changed) {
@@ -2394,6 +2464,30 @@ function aiAccountStats(results) {
   const invested = openAi.reduce((s, p) => s + (p.invested != null ? p.invested : (p.qty * p.entry) / (p.lev || 1)), 0);
   return { equity: AI_START + realized + unrealized, realized, unrealized, invested, openCount: openAi.length };
 }
+/* Kelly criterion — the mathematically optimal bet fraction given the bot's OWN
+   measured edge (win rate W and average win/loss ratio R from its closed trades).
+   f* = W − (1−W)/R. We use HALF-Kelly (industry standard — full Kelly is too wild)
+   and blend toward confidence-only sizing until the sample is meaningful. Returns
+   a fraction of equity to COMMIT as margin, bounded to the 10%–80% mandate. */
+function kellyFraction(conviction) {
+  const confNorm = clamp(((conviction || 50) - 50) / 45, 0, 1);
+  const confBet = 0.10 + confNorm * 0.30;             // 10%→40%, the pre-track-record sizing
+  const closed = loadJournal().filter(e => e.by === "AI" && e.result !== "note" && isFinite(e.r));
+  if (closed.length < 8) return { frac: confBet, basis: "confidence (only " + closed.length + " closed trades — need 8 for Kelly)" };
+  const wins = closed.filter(e => e.r > 0);
+  const losses = closed.filter(e => e.r <= 0);
+  const W = wins.length / closed.length;
+  const avgWin = wins.length ? wins.reduce((s, e) => s + e.r, 0) / wins.length : 0;
+  const avgLoss = losses.length ? Math.abs(losses.reduce((s, e) => s + e.r, 0) / losses.length) : 1;
+  const R = avgLoss > 0 ? avgWin / avgLoss : avgWin;
+  let kelly = R > 0 ? W - (1 - W) / R : 0;
+  kelly = clamp(kelly * 0.5, 0, 0.8);                 // half-Kelly, capped at the 80% mandate
+  // scale the Kelly fraction by this specific setup's confidence, blend with confBet
+  const sized = kelly * (0.6 + confNorm * 0.8);
+  const frac = clamp(0.6 * sized + 0.4 * confBet, 0.10, 0.80);
+  return { frac, basis: "Kelly (win " + (W * 100).toFixed(0) + "%, payoff " + R.toFixed(2) + ":1 over " + closed.length + " trades) → half-Kelly " + (kelly * 100).toFixed(0) + "%, confidence-scaled" };
+}
+
 /* Cooldown after any close on an asset: no instant re-entry — the #1 way bots
    churn fees. Wins wait ~3 bars (min 30 min); losses and manual closes wait 3×. */
 function inCooldown(assetId, tf) {
@@ -2444,36 +2538,38 @@ function autoPilotExecute(decisions) {
     delete state.pendingEntries[pKey];                // confirmed on consecutive scans — trade it
     const available = equity - investedSoFar;         // free cash — the AI can't spend money it doesn't have
 
-    // ---- fee-efficient conviction sizing: bets are 10% → 40% of equity, total
-    // deployment capped at 80%, leverage solved so risk lands at 2–4% (6% hard cap)
+    // ---- Kelly-criterion sizing: the bot decides its own bet from its measured
+    // edge (10%–80% of the fund), volatility-scaled, ≤80% total deployed
     const confNorm = clamp((d.conviction - 50) / 45, 0, 1);
     const minBet = equity * 0.10;
     const deployLeft = equity * 0.80 - investedSoFar;
-    let invested = equity * (0.10 + confNorm * 0.30);
+    const kelly = kellyFraction(d.conviction);
+    let invested = equity * kelly.frac;
     invested *= d.volFactor || 1;                     // volatility targeting: constant-risk exposure, not constant notional
     if (d.regime === "chop") invested *= 0.6;
-    invested = Math.min(Math.max(invested, minBet), equity * 0.40, deployLeft, available);
-    if (invested < minBet - 1e-9) continue;           // can't place a full-size bet — stand aside
+    invested = Math.min(Math.max(invested, minBet), equity * 0.80, deployLeft, available);
+    if (invested < minBet - 1e-9) continue;           // not enough free capital for a full-size bet — stand aside
     const mLev = maxLevFor(d.asset.id);               // this market's real exchange maximum
     const stopPct = d.stopDist / d.entry;
     if (!(stopPct > 0)) continue;
+    // solve leverage for a 2–4% risk target, but CAP it so liquidation stays
+    // ≥4×ATR away — diamond-hands needs room to hold through the stop
+    const atrPct = (d.atrNow || d.stopDist / 1.5) / d.entry;
+    const liqSafeLev = atrPct > 0 ? Math.floor(0.99 / (4 * atrPct)) : mLev;
+    const capLev = Math.max(1, Math.min(mLev, liqSafeLev));
     const riskTarget = equity * (0.02 + confNorm * 0.02);
-    let lev = Math.max(1, Math.min(mLev, Math.round(riskTarget / (invested * stopPct))));
+    let lev = Math.max(1, Math.min(capLev, Math.round(riskTarget / (invested * stopPct))));
     let notional = invested * lev;
-    if (notional * stopPct > equity * 0.06) {         // hard risk ceiling
-      lev = Math.max(1, Math.floor((equity * 0.06) / (invested * stopPct)));
-      notional = invested * lev;
-      if (notional * stopPct > equity * 0.06) continue;   // stop too wide even at 1× — not tradeable at min size
-    }
     if (notional < MIN_NOTIONAL) continue;            // never pay fees on dust
     const qty = notional / d.entry;
     investedSoFar += invested;
+    d.kellyBasis = kelly.basis;
     positions.push({
       id: "p" + Date.now() + Math.random().toString(36).slice(2, 6),
       asset: d.asset.id, tf: d.tf, dir: d.dir, entry: d.entry, stop: d.stop, target: d.target,
       qty, lev, liq: liqPrice(d.entry, d.dir, lev), riskAmt: qty * d.stopDist, stopDist: d.stopDist, stopDist0: d.stopDist,
       invested, conviction: d.conviction, riskPctUsed: (qty * d.stopDist) / Math.max(equity, 1), rationale: d.rationale,
-      openedAt: Date.now(), status: "open", placedBy: "AI", live: true,
+      exitStyle: cfg.exitStyle, openedAt: Date.now(), status: "open", placedBy: "AI", live: true,
     });
     openAssets.add(d.asset.id); openCount++; placed++;
     if (alertsEnabled()) {
@@ -2715,7 +2811,7 @@ function renderPositions(results) {
     "started with " + fmtMoney(AI_START) + " · realized " + (ai.realized >= 0 ? "+" : "") + fmtMoney(ai.realized),
     ai.equity >= AI_START ? getCss("--status-good") : getCss("--status-critical"));
   addTile(sum, "🤖 AI invested now", fmtMoney(ai.invested),
-    ai.openCount + " position" + (ai.openCount === 1 ? "" : "s") + " · 10–40% per bet by confidence, ≤80% deployed",
+    ai.openCount + " position" + (ai.openCount === 1 ? "" : "s") + " · Kelly-sized 10–80% per bet, ≤80% deployed",
     null);
 
   // record stats
@@ -2915,8 +3011,13 @@ function renderXray(asset, an, candles, plan, source, levels) {
   li("Decision & confidence", d
     ? d.label + " at " + d.conviction + "% measured confidence — hover this chart's row in the AI board for the full arithmetic."
     : "no trade candidate on this chart right now (score inside the neutral band, below your trigger, or gated) — waiting is a position.");
-  li("Sizing (volatility-targeted)", "bets scale 10%→40% of the AI's equity with confidence, multiplied by a volatility factor (calm charts size up, wild ones down — the documented Sharpe improver), ≤80% of the portfolio deployed at once; leverage is then solved so a stop-out costs 2–4% of equity (6% ceiling).");
-  li("Live management", "breakeven lock at +1R · 1.6×ATR trail past +1.5R · target extends while momentum stays STRONG · profit banked early when belief fades · instant cut if the signal flips · stops never widen.");
+  const kb = kellyFraction(d ? d.conviction : 60);
+  li("Sizing (Kelly criterion)", "bet fraction from the bot's own measured edge — " + kb.basis + " → commits " + (kb.frac * 100).toFixed(0) + "% of the fund here, volatility-scaled, ≤80% total deployed; leverage solved so liquidation stays ≥4×ATR away.");
+  li("Exit style: " + ((state.cfg.exitStyle === "hard") ? "Hard stops" : "Diamond hands"),
+    state.cfg.exitStyle === "hard"
+      ? "classic — stops are always honored, cut on a confirmed flip."
+      : "the stop is a decision point: if it's hit while the engine still reads the same direction, HOLD (don't realize the loss), buy the low once to average down, close only on a genuine signal flip or an emergency exit before liquidation — the one true floor.");
+  li("Winning-side management", "breakeven lock at +1R · 1.6×ATR trail past +1.5R · target extends while momentum stays STRONG · profit banked early when belief fades · stops never widen.");
 }
 
 /* ---------- backtest UI ---------- */
@@ -3014,17 +3115,96 @@ function renderBacktest(asset, rows) {
     "Trust the engine only as far as its forward paper-trading record above keeps confirming it."));
 }
 
+/* Real TradingView advanced chart — loaded lazily, degrades gracefully if the
+   external script is blocked (e.g. offline). The widget has every timeframe and
+   drawing tool built in; our timeframe buttons set its initial interval. */
+let tvScriptState = "none";   // none | loading | ready | failed
+function loadTvScript() {
+  return new Promise((resolve) => {
+    if (tvScriptState === "ready") return resolve(true);
+    if (tvScriptState === "failed") return resolve(false);
+    if (tvScriptState === "loading") {
+      const iv = setInterval(() => {
+        if (tvScriptState !== "loading") { clearInterval(iv); resolve(tvScriptState === "ready"); }
+      }, 200);
+      return;
+    }
+    tvScriptState = "loading";
+    const sc = document.createElement("script");
+    sc.src = "https://s3.tradingview.com/tv.js";
+    sc.onload = () => { tvScriptState = "ready"; resolve(true); };
+    sc.onerror = () => { tvScriptState = "failed"; resolve(false); };
+    document.head.appendChild(sc);
+    setTimeout(() => { if (tvScriptState === "loading") { tvScriptState = "failed"; resolve(false); } }, 8000);
+  });
+}
+function renderTradingView(asset) {
+  const holder = $("tvChart");
+  const key = asset.tv + "|" + state.tf;
+  if (holder.dataset.key === key && holder.querySelector("iframe")) return;   // already showing it
+  holder.dataset.key = key;
+  loadTvScript().then((ok) => {
+    if (holder.dataset.key !== key) return;   // user moved on
+    if (!ok || !window.TradingView) {
+      clear(holder);
+      const fb = el("div", "tv-fallback",
+        "TradingView's chart couldn't load (you may be offline, or a network blocker is active). Your live engine charts still work — switch to “Candles + engine markers” above.");
+      holder.appendChild(fb);
+      return;
+    }
+    clear(holder);
+    const inner = document.createElement("div");
+    inner.id = "tvInner";
+    inner.style.height = "100%";
+    holder.appendChild(inner);
+    const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    try {
+      new window.TradingView.widget({
+        container_id: "tvInner",
+        autosize: true,
+        symbol: asset.tv,
+        interval: TV_INTERVAL[state.tf] || "60",
+        timezone: "Etc/UTC",
+        theme: dark ? "dark" : "light",
+        style: "1",
+        locale: "en",
+        enable_publishing: false,
+        allow_symbol_change: true,
+        hide_side_toolbar: false,
+        studies: ["STD;EMA", "STD;RSI"],
+        withdateranges: true,
+      });
+    } catch (_) {
+      clear(holder);
+      holder.appendChild(el("div", "tv-fallback", "TradingView chart unavailable — use the Candles view above."));
+    }
+  });
+}
+
 function renderCharts(asset, an, candles, levels, plan) {
   const s = candles.length - SHOWN;
   const win = (arr) => arr.slice(s);
   const times = win(candles.map(c => c.t));
   const closes = win(candles.map(c => c.c));
 
+  for (const b of document.querySelectorAll("#styleGroup button"))
+    b.classList.toggle("active", b.dataset.cs === state.chartStyle);
+
+  // TradingView mode — the real interactive chart with every timeframe built in
+  if (state.chartStyle === "tv") {
+    $("priceTitle").textContent = "TradingView — " + asset.name + " (" + asset.id + "/USD) · switch timeframe with the toolbar on the chart or the buttons above";
+    $("tvChart").classList.remove("hidden");
+    $("priceChart").classList.add("hidden");
+    clear($("priceLegend"));
+    renderTradingView(asset);
+    return;
+  }
+  $("tvChart").classList.add("hidden");
+  $("priceChart").classList.remove("hidden");
+
   const styleCandles = state.chartStyle !== "line";
   $("priceTitle").textContent = (styleCandles ? "Live trading view — " : "Price — ") +
     asset.name + " · last " + SHOWN + " × " + TIMEFRAMES[state.tf].label + " bars";
-  for (const b of document.querySelectorAll("#styleGroup button"))
-    b.classList.toggle("active", b.dataset.cs === (styleCandles ? "candles" : "line"));
 
   // legend
   const leg = $("priceLegend");
@@ -3386,8 +3566,14 @@ function wireControls() {
     $("cfgStrong").value = String(state.cfg.strongTh);
     $("cfgStop").value = String(state.cfg.stopMult);
     $("cfgTgt").value = String(state.cfg.tgtMult);
+    $("cfgExit").value = state.cfg.exitStyle || "smart";
     $("cfgPredictor").value = state.cfg.predictorUrl || "";
   };
+  $("cfgExit").addEventListener("change", () => {
+    state.cfg.exitStyle = $("cfgExit").value;
+    saveCfg();
+    refresh(false);
+  });
   $("cfgPredictor").addEventListener("change", () => {
     state.cfg.predictorUrl = $("cfgPredictor").value.trim();
     saveCfg();

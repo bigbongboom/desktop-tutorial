@@ -64,6 +64,19 @@ One file, zero dependencies — open `index.html` in any browser.
   the trade plan's profit-taking notes.
 - **Full transparency**: every signal's reading and point contribution is listed in the
   breakdown table, and every chart has an accessible data-table twin.
+- **Real TradingView charts** on the signal desk (default view) — the full interactive
+  TradingView advanced chart with every timeframe and drawing tool built in, per asset;
+  degrades gracefully to the built-in engine candles if the script is blocked. Plus an
+  engine-marker candle view and a line+indicators view.
+- **Kelly-criterion sizing** — once the AI has 8+ closed trades it computes its own
+  measured edge (win rate × payoff ratio) and commits the mathematically optimal
+  fraction (half-Kelly), 10–80% of the fund by its own judgment, volatility-scaled,
+  ≤80% deployed, leverage solved so liquidation stays ≥4×ATR away.
+- **Diamond-hands exits** (default, switchable to hard stops) — the stop is a decision
+  point, not an auto-exit: if price hits it while the engine still reads the same
+  direction the AI holds instead of realizing the loss, buys the low once to average
+  down, and closes only on a genuine signal flip or an emergency exit before
+  liquidation — the one true floor.
 - **Live trading view** — TradingView-style candlestick chart (down to 1-minute bars)
   with a position overlay: green zone from entry to take-profit, red zone from entry to
   stop-loss, with SL/TP price and percentage labels; shows your open paper trade or the

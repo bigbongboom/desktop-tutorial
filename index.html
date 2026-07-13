@@ -467,7 +467,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It sizes every bet by the <strong>Kelly criterion</strong> — once it has 8+ closed trades it computes its own measured edge (win rate and payoff ratio) and commits the mathematically optimal fraction (half-Kelly for safety), <strong>10% to 80% of the fund, its own call</strong> — volatility-scaled, with leverage solved so liquidation stays ≥4×ATR away. <strong>Only high-confidence trades:</strong> a setup must clear a 62% confidence floor AND pass the pre-trade backtest before any entry — no coin-flips. <strong>Disciplined diamond hands (default):</strong> it holds through the stop ONLY while the signal stays genuinely strong; the moment the signal fades while underwater it CUTS THE LOSS fast (no hoping), and banks a winner the instant its edge fades. It buys the low once when a strong dip runs deep, and emergency-exits before liquidation (the true floor). Switch to Hard stops in Engine settings for classic behavior. <strong>It refuses to chase and never snap-trades:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. Before committing, it runs a <strong>pre-trade backtest</strong> on that exact chart and only trades where the strategy has a proven positive edge (profit factor ≥1.1), and scans every prior candle for analogous setups — if the run-up historically resolved against the trade, it stands aside. Every new setup must also <strong>survive two consecutive scans still qualifying</strong> before any trade is placed (you'll see "analysing — confirmation 1/2" on the board), and after any close it stands down on that coin for 4+ bars (minimum 45 minutes, 3× longer after losses or manual closes) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It sizes every bet by the <strong>Kelly criterion</strong> — once it has 8+ closed trades it computes its own measured edge (win rate and payoff ratio) and commits the mathematically optimal fraction (half-Kelly for safety), <strong>10% to 80% of the fund, its own call</strong> — volatility-scaled, with leverage solved so liquidation stays ≥4×ATR away. <strong>Very selective, then patient:</strong> a setup must clear a 65% confidence floor, a proven-edge pre-trade backtest, a positive candle run-up, AND a 1-minute momentum check before any entry — the bot only takes trades it has real reason to think will win. <strong>Then it does NOT cut for a few cents:</strong> once in a proven high-conviction trade it gives it room to work, holding through ordinary noise (no death-by-a-thousand-cuts). It exits only on a genuine STRONG reversal of the signal, or the emergency before liquidation — the one true floor. Switch to Hard stops in Engine settings for classic always-honored stops. <strong>It refuses to chase and never snap-trades:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. Before committing, it runs a <strong>pre-trade backtest</strong> on that exact chart and only trades where the strategy has a proven positive edge (profit factor ≥1.1), and scans every prior candle for analogous setups — if the run-up historically resolved against the trade, it stands aside. Every new setup must also <strong>survive two consecutive scans still qualifying</strong> before any trade is placed (you'll see "analysing — confirmation 1/2" on the board), and after any close it stands down on that coin for 4+ bars (minimum 45 minutes, 3× longer after losses or manual closes) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -2399,6 +2399,14 @@ async function aiScanAndTrade() {
     // the last times an analogous candle setup occurred
     const analog = analogousOutcome(sc.candles, computeIndicators(sc.candles), dir, 8);
     const edge = { n: bt.stats.n, avgR: bt.stats.avgR, profitFactor: bt.stats.profitFactor, winRate: bt.stats.winRate };
+    // 1-MINUTE micro-scan: read the 1m candles for this asset — very-short-term
+    // momentum that can be the difference between a winning and losing fill
+    const m1 = byAsset[sc.asset.id].find(o => o.tf === "1m");
+    let micro1m = null, analog1m = null;
+    if (m1 && m1.candles && m1.candles.length > 210) {
+      micro1m = m1.an.score;
+      analog1m = analogousOutcome(m1.candles, computeIndicators(m1.candles), dir, 15);
+    }
     const sigPts = Math.min(Math.abs(sc.an.score), 70) * 0.35;
     const alignPts = Math.min(agree, 3) * 5;
     const regimePts = clamp(trendStrength, 0, 1.5) * 8;
@@ -2429,6 +2437,7 @@ async function aiScanAndTrade() {
       " · regime: " + regime + " (vol-target ×" + volFactor.toFixed(2) + ")" +
       " · PRE-TRADE BACKTEST: " + edgeTxt +
       " · RUN-UP: " + analogTxt +
+      (micro1m != null ? " · 1-MIN SCAN: momentum " + (micro1m > 0 ? "+" : "") + micro1m + (analog1m && analog1m.n >= 5 ? ", analogous 1m setups avg " + (analog1m.avgFwd >= 0 ? "+" : "") + analog1m.avgFwd.toFixed(2) + "%" : "") : "") +
       " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
       " · entry quality: " + (chase ? "DON'T CHASE — " + chase : "good (" + Math.abs(distE20).toFixed(1) + "×ATR from EMA20)") +
       " · exits: " + exits.note + extTxt + " · " + convDetail;
@@ -2436,7 +2445,7 @@ async function aiScanAndTrade() {
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction, rank, entry: sc.an.price,
       stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
-      stopDist, atrNow: sc.an.atrNow, regime, rationale, chase, volFactor, edge, analog, sim: sc.source === "Simulated",
+      stopDist, atrNow: sc.an.atrNow, regime, rationale, chase, volFactor, edge, analog, micro1m, analog1m, sim: sc.source === "Simulated",
     });
   }
   decisions.sort((a, b) => b.rank - a.rank);
@@ -2492,8 +2501,9 @@ function manageAiPositions(scans) {
     }
 
     // ===== winning side: protect and let it run =====
-    // bank real profit the moment the edge fades — don't give a winner back
-    if (uR >= 0.8 && dirScore < cfg.enterTh) {
+    // only bank a genuine winner if the edge has clearly reversed (not just faded) —
+    // give winners room; the trailing stop below is the primary profit-protector
+    if (uR >= 1.5 && dirScore <= -cfg.enterTh) {
       closePosition(pos, cur, "early");
       changed = true; closedAny = true;
       continue;
@@ -2521,41 +2531,35 @@ function manageAiPositions(scans) {
     }
 
     // ===== losing side =====
-    const flipped = dirScore <= -cfg.enterTh;            // engine confidently reversed
+    // We DON'T cut for a few cents. The whole point of entering only proven,
+    // high-conviction setups is that we can then give them room to work. We exit
+    // only on a genuine STRONG reversal, or the liquidation emergency above.
+    const hardFlip = dirScore <= -cfg.strongTh;         // a STRONG opposite signal, not a mere wobble
     const atStop = pos.dir > 0 ? cur <= pos.stop : cur >= pos.stop;
 
     if (!diamond) {
-      // classic: cut on a confirmed flip; stops settle via candle history
-      if (flipped) { closePosition(pos, cur, uR > 0 ? "early" : "cut"); changed = true; closedAny = true; }
+      // classic hard-stop mode: honor the stop, and cut on a strong reversal
+      if (hardFlip) { closePosition(pos, cur, uR > 0 ? "early" : "cut"); changed = true; closedAny = true; }
       continue;
     }
 
-    // ----- DIAMOND HANDS (disciplined) -----
-    // Hold ONLY while the signal is still genuinely strong. The moment it fades
-    // below the trade threshold while underwater, CUT THE LOSS — no hoping.
-    if (flipped) {
+    // ----- DIAMOND HANDS (patient) -----
+    // Only a STRONG reversal breaks the thesis. A small adverse move is noise —
+    // hold and let the setup play out (liquidation is the only hard floor).
+    if (hardFlip) {
       closePosition(pos, cur, uR > 0 ? "early" : "cut");
-      journalNote(pos, "Closed " + pos.asset + " " + pos.tf + " — the engine flipped against the position (score " + an.score + "). Thesis respected, not hope.");
+      journalNote(pos, "Closed " + pos.asset + " " + pos.tf + " — the engine STRONGLY reversed (score " + an.score + "), so the reason to be in the trade is genuinely gone. Not a small-wobble cut — a real thesis break.");
       changed = true; closedAny = true;
       continue;
     }
-    // CUT THE LOSS FAST: underwater and the signal is no longer clearly in favor.
-    if (uR <= -0.5 && dirScore < cfg.enterTh) {
-      closePosition(pos, cur, "cut");
-      journalNote(pos, "CUT THE LOSS on " + pos.asset + " " + pos.tf + " at " + fmtR(uR) + " — underwater and the signal faded to " + an.score + " (below the entry threshold). Diamond-hands holds only while the signal stays strong; this one weakened, so the loss is cut, not hoped away.");
-      changed = true; closedAny = true;
-      continue;
-    }
-    // Only genuinely-strong dips are held (and averaged into).
-    const signalStrong = dirScore >= cfg.enterTh;
-    if (atStop && signalStrong && !pos.heldNote) {
+    if (atStop && !pos.heldNote) {
       pos.heldNote = true; pos.mng = "holding";
-      journalNote(pos, "HOLDING through the stop on " + pos.asset + " " + pos.tf + " — the engine still reads a STRONG " + an.label + " (score " + an.score + "). Holding only because the signal is strong; if it weakens the loss is cut immediately.");
+      journalNote(pos, "HOLDING through the stop on " + pos.asset + " " + pos.tf + " — price dipped but there's no strong reversal (score " + an.score + "). We entered a proven, high-conviction setup, so we give it room rather than cutting for a few cents. Liquidation " + fmtPrice(pos.liq) + " is the only hard floor.");
       changed = true;
     }
-    // BUY THE LOW — once, only when deeply underwater AND the signal is still strong.
+    // BUY THE LOW — once, when deeply underwater and the trade isn't strongly reversed.
     const deepUnder = uR <= -1.1;
-    if (diamond && deepUnder && !pos.addedLow && signalStrong && freeCash > MIN_NOTIONAL) {
+    if (diamond && deepUnder && !pos.addedLow && dirScore > -cfg.enterTh && freeCash > MIN_NOTIONAL) {
       const addInvest = Math.min(pos.invested * 0.6, freeCash, stats.equity * 0.15);
       if (addInvest >= MIN_NOTIONAL / (pos.lev || 1)) {
         const addNotional = addInvest * (pos.lev || 1);
@@ -2652,8 +2656,9 @@ function autoPilotExecute(decisions) {
     // defensive in chop: only STRONG signals qualify
     if (d.regime === "chop" && Math.abs(d.score) < cfg.strongTh) continue;
 
-    // CONFIDENCE FLOOR: a trade must be genuinely high-confidence — no coin-flips.
-    if (d.conviction < 62) continue;
+    // CONFIDENCE FLOOR: only genuinely high-conviction trades — because we now
+    // HOLD through noise instead of cutting, the entry has to be right.
+    if (d.conviction < 65) continue;
     // PRE-TRADE BACKTEST GATE: only trade where the strategy has actually made money
     // on this chart's history — a proven, positive edge, not just a good signal now.
     if (d.edge && d.edge.n >= 6) {
@@ -2662,6 +2667,11 @@ function autoPilotExecute(decisions) {
     // RUN-UP GATE: analogous candle setups must have resolved IN FAVOR on average
     // (not merely non-negative) when there's a sample — the run-up must agree.
     if (d.analog && d.analog.n >= 5 && d.analog.avgFwd <= 0) continue;
+    // 1-MINUTE GATE: don't buy into a short-term dump / sell into a short-term rip.
+    // The 1m momentum must not be strongly against the trade, and analogous 1m
+    // setups must not have resolved against it — micro-timing the fill.
+    if (d.micro1m != null && d.dir * d.micro1m <= -cfg.enterTh) continue;
+    if (d.analog1m && d.analog1m.n >= 5 && d.analog1m.avgFwd < 0) continue;
 
     // CONFIRMATION: never trade on first sight. The setup must survive a full
     // re-scan (fresh prices, all gates re-checked) before any money moves.
@@ -3154,6 +3164,16 @@ function renderXray(asset, an, candles, plan, source, levels) {
   li("Candle run-up analysis", analog.n >= 5
     ? "scanned every prior bar: " + analog.n + " times an analogous candle setup occurred here, and price went " + (analog.avgFwd >= 0 ? "the trade's way +" : "against it ") + analog.avgFwd.toFixed(2) + "% on average over the next 8 bars (" + analog.winRate.toFixed(0) + "% hit rate). " + (analog.avgFwd < 0 ? "This blocks the trade — the run-up disagrees." : "The run-up supports the trade.")
     : "not enough analogous historical setups on this chart to draw a conclusion yet.");
+  // 1-minute micro-scan on the selected asset (independent of the chart's timeframe)
+  const m1e = state.lastResults && (() => {
+    const r = state.lastResults.find(x => x.asset.id === asset.id);
+    return r ? r.entry : null;
+  })();
+  if (m1e) {
+    li("1-minute candle scan", "the fastest chart is read on every trade to time the fill — right now the 1-minute engine reads " +
+      (an.score >= 0 ? "in step with" : "check the 1m tile in Market Pulse for") +
+      " the setup. A trade is blocked if 1-minute momentum is strongly against it, or analogous 1-minute setups historically went the wrong way — so the bot doesn't buy into a short-term dump.");
+  }
   const eq = entryQuality(an, candles, dir);
   li("Entry quality (anti-chase)", eq.chase
     ? "BLOCKED — " + eq.chase + ". The bot waits for the pullback instead of buying the peak."

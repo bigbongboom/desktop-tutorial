@@ -1574,9 +1574,13 @@ function recordTradeOutcome(pos) {
   else if (pos.result === "liq")
     lesson = "LIQUIDATED — leverage exceeded what the volatility allowed. Rule reinforced: size down before levering up, and never widen a stop.";
   else if (pos.result === "early")
-    lesson = "Banked " + rTxt + " early — the engine stopped believing the target would be hit; protecting real profit beats hoping (" + record + ").";
+    lesson = "Banked " + rTxt + " — a strong reversal appeared while in profit, so the gain was protected (" + record + ").";
+  else if (pos.result === "reversal")
+    lesson = "Exited at " + rTxt + " — the engine STRONGLY reversed, a genuine thesis break (not an early cut for cents). The trade was held through noise and only closed when the signal truly turned (" + record + ").";
+  else if (pos.result === "emergency")
+    lesson = "Liquidation-protect exit at " + rTxt + " — price approached the liquidation price, so remaining margin was saved. Held as long as safely possible (" + record + ").";
   else if (pos.result === "cut")
-    lesson = "Cut early at " + rTxt + " — the signal flipped hard against the trade; a small controlled loss instead of riding to the full stop (" + record + ").";
+    lesson = "Exited at " + rTxt + " — signal reversed (" + record + ").";
   else
     lesson = "Closed manually — record for this setup now " + record + ".";
   const j = loadJournal();
@@ -2493,8 +2497,8 @@ function manageAiPositions(scans) {
       const liqBuffer = 1.2 * atr;
       const nearLiq = pos.dir > 0 ? cur <= pos.liq + liqBuffer : cur >= pos.liq - liqBuffer;
       if (nearLiq) {
-        closePosition(pos, cur, "cut");
-        journalNote(pos, "EMERGENCY EXIT on " + pos.asset + " " + pos.tf + " — price approached the liquidation price " + fmtPrice(pos.liq) + "; closed to save the remaining margin. Liquidation is the only real floor.");
+        closePosition(pos, cur, "emergency");
+        journalNote(pos, "LIQUIDATION-PROTECT EXIT on " + pos.asset + " " + pos.tf + " — price approached the liquidation price " + fmtPrice(pos.liq) + "; closed to save the remaining margin. Liquidation is the only real floor.");
         changed = true; closedAny = true;
         continue;
       }
@@ -2538,8 +2542,8 @@ function manageAiPositions(scans) {
     const atStop = pos.dir > 0 ? cur <= pos.stop : cur >= pos.stop;
 
     if (!diamond) {
-      // classic hard-stop mode: honor the stop, and cut on a strong reversal
-      if (hardFlip) { closePosition(pos, cur, uR > 0 ? "early" : "cut"); changed = true; closedAny = true; }
+      // classic hard-stop mode: honor the stop, and exit on a strong reversal
+      if (hardFlip) { closePosition(pos, cur, uR > 0 ? "early" : "reversal"); changed = true; closedAny = true; }
       continue;
     }
 
@@ -2547,7 +2551,7 @@ function manageAiPositions(scans) {
     // Only a STRONG reversal breaks the thesis. A small adverse move is noise —
     // hold and let the setup play out (liquidation is the only hard floor).
     if (hardFlip) {
-      closePosition(pos, cur, uR > 0 ? "early" : "cut");
+      closePosition(pos, cur, uR > 0 ? "early" : "reversal");
       journalNote(pos, "Closed " + pos.asset + " " + pos.tf + " — the engine STRONGLY reversed (score " + an.score + "), so the reason to be in the trade is genuinely gone. Not a small-wobble cut — a real thesis break.");
       changed = true; closedAny = true;
       continue;
@@ -2778,7 +2782,8 @@ function renderAiBoard() {
       const rSpan = el("span", "journal-r" + (isNote ? "" : " " + (e.pnl > 0 ? "win" : "loss")),
         isNote ? "MANAGED"
                : (e.result === "tp" ? "TARGET HIT " : e.result === "sl" ? "STOPPED " : e.result === "liq" ? "LIQUIDATED "
-                  : e.result === "early" ? "BANKED EARLY " : e.result === "cut" ? "CUT EARLY " : "CLOSED ") +
+                  : e.result === "emergency" ? "LIQ-PROTECT " : e.result === "reversal" ? "SIGNAL REVERSED "
+                  : e.result === "early" ? "BANKED PROFIT " : e.result === "cut" ? "SIGNAL REVERSED " : "CLOSED ") +
                  (e.r >= 0 ? "+" : "") + (isFinite(e.r) ? e.r.toFixed(2) : "0.00") + "R");
       item.appendChild(rSpan);
       item.appendChild(document.createTextNode(" — " + e.lesson));
@@ -3052,7 +3057,8 @@ function renderPositions(results) {
     const chip = el("span", "pos-chip " + (isOpen ? (pnl >= 0 ? "win" : "loss") : (p.pnl > 0 ? "win" : "loss")),
       isOpen ? (pnl >= 0 ? "OPEN ▲ PROFIT" : "OPEN ▼ LOSS")
              : p.result === "tp" ? "TARGET HIT" : p.result === "sl" ? "STOPPED" : p.result === "liq" ? "LIQUIDATED"
-             : p.result === "early" ? "BANKED EARLY" : p.result === "cut" ? "CUT EARLY" : "CLOSED");
+             : p.result === "emergency" ? "LIQ-PROTECT" : p.result === "reversal" ? "SIGNAL REVERSED"
+             : p.result === "early" ? "BANKED PROFIT" : p.result === "cut" ? "SIGNAL REVERSED" : "CLOSED");
     stTd.appendChild(chip);
     tr.appendChild(stTd);
 

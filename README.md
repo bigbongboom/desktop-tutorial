@@ -64,6 +64,14 @@ One file, zero dependencies — open `index.html` in any browser.
   the trade plan's profit-taking notes.
 - **Full transparency**: every signal's reading and point contribution is listed in the
   breakdown table, and every chart has an accessible data-table twin.
+- **Selectable strategy** (Engine settings) — Composite (14-signal + confidence) or
+  **Trend Pullback** (the documented "buy dips in an established uptrend, never the top"
+  method: price>EMA200, EMA50>EMA200, pullback to the EMA20 zone, RSI resetting, EMA20
+  reclaim; mirrored for shorts). The backtester runs BOTH on the same live history and
+  tells you which won on each asset/timeframe.
+- **Forward projection** — an honest probabilistic forecast cone (expected drift + a
+  ±1σ volatility band that grows with √time) drawn on the Candles view and stated in the
+  X-ray. A forecast from current drift and volatility, explicitly NOT real future data.
 - **Real TradingView charts** on the signal desk (default view) — the full interactive
   TradingView advanced chart with every timeframe and drawing tool built in, per asset;
   degrades gracefully to the built-in engine candles if the script is blocked. Plus an

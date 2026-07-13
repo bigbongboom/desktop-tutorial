@@ -420,6 +420,12 @@
           <option value="5">5.0 ×ATR — moonshot</option>
         </select>
       </label>
+      <label>Strategy
+        <select id="cfgStrategy">
+          <option value="composite">Composite (14-signal + confidence)</option>
+          <option value="pullback">Trend Pullback (buy dips in trends)</option>
+        </select>
+      </label>
       <label>AI exit style
         <select id="cfgExit">
           <option value="smart">Diamond hands — hold &amp; re-analyze at the stop</option>
@@ -664,7 +670,7 @@ const state = {
 
 /* Engine settings — every knob customizable, persisted, and honored by the
    verdict labels, trade plan, tickets, alerts AND the backtester. */
-const CFG_DEFAULTS = { enterTh: 18, strongTh: 45, stopMult: 1.5, tgtMult: 2.5, trigger: "strong", predictorUrl: "", exitStyle: "smart" };
+const CFG_DEFAULTS = { enterTh: 18, strongTh: 45, stopMult: 1.5, tgtMult: 2.5, trigger: "strong", predictorUrl: "", exitStyle: "smart", strategy: "composite" };
 function loadCfg() {
   try { return { ...CFG_DEFAULTS, ...JSON.parse(localStorage.getItem("csd_cfg") || "{}") }; }
   catch (_) { return { ...CFG_DEFAULTS }; }
@@ -1270,11 +1276,42 @@ function smartLevels(dir, entry, atr, conviction, regime, strong, candles) {
 }
 
 /* ============================================================
-   Backtester — replays the engine bar-by-bar, entries on the
-   NEXT bar's open, stop counted before target when both hit.
+   TREND PULLBACK strategy — the documented "buy the dip in an
+   uptrend" method (never the top): only longs in a confirmed
+   uptrend (price>EMA200, EMA50>EMA200) on a pullback to the
+   EMA20 zone with RSI resetting up and price reclaiming EMA20;
+   mirrored for shorts in downtrends. This is what stops the bot
+   chasing peaks — it enters strength on weakness, not extension.
    ============================================================ */
-function backtest(candles) {
+function pullbackSignal(ind, i) {
+  const { closes, e20, e50, e200, r } = ind;
+  if (i < 205 || e200[i] == null || e50[i] == null || e20[i] == null || r[i] == null || r[i - 1] == null) return { dir: 0 };
+  const up = closes[i] > e200[i] && e50[i] > e200[i];
+  const down = closes[i] < e200[i] && e50[i] < e200[i];
+  if (!up && !down) return { dir: 0 };
+  // did price pull back into the EMA20 zone within the last 5 bars?
+  let pulled = false;
+  for (let k = Math.max(0, i - 5); k <= i; k++) {
+    if (e20[k] == null) continue;
+    if (up && closes[k] <= e20[k] * 1.004) pulled = true;
+    if (down && closes[k] >= e20[k] * 0.996) pulled = true;
+  }
+  if (!pulled) return { dir: 0 };
+  const reclaim = up ? closes[i] > e20[i] : closes[i] < e20[i];
+  const rsiTurn = up ? (r[i] > r[i - 1] && r[i] > 40 && r[i] < 66) : (r[i] < r[i - 1] && r[i] < 60 && r[i] > 34);
+  if (up && reclaim && rsiTurn) return { dir: 1, reason: "uptrend pullback — reclaimed EMA20, RSI " + r[i].toFixed(0) + " turning up" };
+  if (down && reclaim && rsiTurn) return { dir: -1, reason: "downtrend pullback — rejected EMA20, RSI " + r[i].toFixed(0) + " turning down" };
+  return { dir: 0 };
+}
+
+/* ============================================================
+   Backtester — replays the chosen strategy bar-by-bar, entries
+   on the NEXT bar's open, stop counted before target when both hit.
+   ============================================================ */
+function backtest(candles, strategyOverride) {
   const ind = computeIndicators(candles);
+  const cfg = state.cfg;
+  const strategy = strategyOverride || cfg.strategy || "composite";
   const warm = 210;                       // EMA200 warm-up
   const trades = [];
   let pos = null;
@@ -1296,12 +1333,19 @@ function backtest(candles) {
     }
     const atrNow = ind.a[i];
     if (atrNow == null) continue;
-    const s = analyzeAt(candles, i, ind);
-    const cfg = state.cfg;
-    const need = cfg.trigger === "strong" ? cfg.strongTh : cfg.enterTh;
-    if (Math.abs(s.score) < need) continue;
-    const dir = s.score > 0 ? 1 : -1;
-    const strong = Math.abs(s.score) >= cfg.strongTh;
+    let dir = 0, strong = false;
+    if (strategy === "pullback") {
+      const ps = pullbackSignal(ind, i);
+      dir = ps.dir;
+      if (!dir) continue;
+      strong = false;
+    } else {
+      const s = analyzeAt(candles, i, ind);
+      const need = cfg.trigger === "strong" ? cfg.strongTh : cfg.enterTh;
+      if (Math.abs(s.score) < need) continue;
+      dir = s.score > 0 ? 1 : -1;
+      strong = Math.abs(s.score) >= cfg.strongTh;
+    }
     const entry = candles[i + 1].o;
     const stopDist = cfg.stopMult * atrNow, tgtDist = (strong ? cfg.tgtMult + 1 : cfg.tgtMult) * atrNow;
     pos = { dir, entry, stop: entry - dir * stopDist, target: entry + dir * tgtDist,
@@ -1605,6 +1649,7 @@ function renderChart(container, tooltipNode, cfg) {
   if (cfg.band) { scan(cfg.band.upper); scan(cfg.band.lower); }
   if (cfg.bars) scan(cfg.bars.values);
   if (cfg.candlesData) for (const c of cfg.candlesData) if (c) { lo = Math.min(lo, c.l); hi = Math.max(hi, c.h); }
+  if (cfg.projection) { scan(cfg.projection.upper); scan(cfg.projection.lower); }
   if (cfg.position) {
     lo = Math.min(lo, cfg.position.stop, cfg.position.target, cfg.position.entry);
     hi = Math.max(hi, cfg.position.stop, cfg.position.target, cfg.position.entry);
@@ -1708,6 +1753,36 @@ function renderChart(container, tooltipNode, cfg) {
     }
   }
 
+  // forward projection — the ±1σ forecast cone over the future portion of the domain
+  if (cfg.projection) {
+    const pr = cfg.projection;
+    const s0 = pr.startIdx;
+    // divider between real history and forecast
+    svg.appendChild(svgEl("line", { x1: x(s0), x2: x(s0), y1: padT, y2: padT + plotH, stroke: getCss("--text-muted"), "stroke-width": 1, "stroke-dasharray": "3 3" }));
+    let top = "", bot = "";
+    for (let idx = s0; idx < n; idx++) {
+      if (pr.upper[idx] == null) continue;
+      top += (top ? "L" : "M") + x(idx).toFixed(1) + " " + y(pr.upper[idx]).toFixed(1);
+    }
+    for (let idx = n - 1; idx >= s0; idx--) {
+      if (pr.lower[idx] == null) continue;
+      bot += "L" + x(idx).toFixed(1) + " " + y(pr.lower[idx]).toFixed(1);
+    }
+    if (top && bot) {
+      const col = pr.dir > 0 ? getCss("--status-good") : pr.dir < 0 ? getCss("--status-critical") : getCss("--series-1");
+      svg.appendChild(svgEl("path", { d: top + bot + "Z", fill: col, "fill-opacity": 0.12, stroke: "none" }));
+      let md = "";
+      for (let idx = s0; idx < n; idx++) {
+        if (pr.mid[idx] == null) continue;
+        md += (md ? "L" : "M") + x(idx).toFixed(1) + " " + y(pr.mid[idx]).toFixed(1);
+      }
+      svg.appendChild(svgEl("path", { d: md, fill: "none", stroke: col, "stroke-width": 2, "stroke-dasharray": "5 4", "stroke-linecap": "round" }));
+      const lbl = svgEl("text", { x: x(s0) + 4, y: padT + 12, fill: getCss("--text-muted"), "font-size": 10, "font-weight": 600 });
+      lbl.textContent = "forecast (projection, not certainty)";
+      svg.appendChild(lbl);
+    }
+  }
+
   // candlesticks — 1px wick, body colored by close vs open
   if (cfg.candlesData) {
     const up = getCss("--candle-up"), dn = getCss("--candle-dn");
@@ -1755,14 +1830,14 @@ function renderChart(container, tooltipNode, cfg) {
 
   // selective direct label: the last price (candle mode) or first series endpoint
   {
-    let vEnd = null, endColor = null;
-    if (cfg.priceTag != null) { vEnd = cfg.priceTag; endColor = getCss("--series-1"); }
+    let vEnd = null, endColor = null, tagIdx = n - 1;
+    if (cfg.priceTag != null) { vEnd = cfg.priceTag; endColor = getCss("--series-1"); if (cfg.projection) tagIdx = cfg.projection.startIdx - 1; }
     else if (cfg.endLabel && cfg.series && cfg.series.length && cfg.series[0].values[n - 1] != null) {
       vEnd = cfg.series[0].values[n - 1];
       endColor = cfg.series[0].color;
     }
     if (vEnd != null) {
-      svg.appendChild(svgEl("circle", { cx: x(n - 1), cy: y(vEnd), r: 4.5, fill: endColor, stroke: getCss("--surface-1"), "stroke-width": 2 }));
+      svg.appendChild(svgEl("circle", { cx: x(tagIdx), cy: y(vEnd), r: 4.5, fill: endColor, stroke: getCss("--surface-1"), "stroke-width": 2 }));
       const lbl = svgEl("text", { x: padL + plotW + 6, y: clamp(y(vEnd) + 3.5, padT + 8, padT + plotH - 2), fill: getCss("--text-primary"), "font-size": 11, "font-weight": 700 });
       lbl.style.fontVariantNumeric = "tabular-nums";
       lbl.textContent = yFmt(vEnd);
@@ -2230,6 +2305,15 @@ async function aiScanAndTrade() {
   for (const sc of valid) {
     if (Math.abs(sc.an.score) < cfg.enterTh) continue;
     const dir = sc.an.score > 0 ? 1 : -1;
+    // TREND PULLBACK strategy: when selected, the AI ONLY takes trades the
+    // pullback signal confirms (buy dips in trends, never the top). Composite
+    // score still sets confidence, but the pullback gate decides eligibility.
+    let pbReason = "";
+    if (cfg.strategy === "pullback") {
+      const ps = pullbackSignal(computeIndicators(sc.candles), sc.candles.length - 1);
+      if (ps.dir !== dir) continue;      // no confirmed pullback in this direction — skip
+      pbReason = ps.reason;
+    }
     const agree = byAsset[sc.asset.id]
       .filter(o => o.tf !== sc.tf && Math.abs(o.an.score) >= cfg.enterTh && Math.sign(o.an.score) === dir).length;
     let rank = Math.abs(sc.an.score) + 8 * agree + (Math.abs(sc.an.score) >= cfg.strongTh ? 10 : 0);
@@ -2306,6 +2390,7 @@ async function aiScanAndTrade() {
       .slice(0, 2).map(c => c.name).join(", ");
     const rationale = sc.an.label + " (" + (sc.an.score > 0 ? "+" : "") + sc.an.score + ") · " +
       agree + " other TF" + (agree === 1 ? "" : "s") + " aligned · drivers: " + (drivers || "mixed") +
+      (pbReason ? " · STRATEGY: " + pbReason : "") +
       " · regime: " + regime + " (vol-target ×" + volFactor.toFixed(2) + ")" +
       " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
       " · entry quality: " + (chase ? "DON'T CHASE — " + chase : "good (" + Math.abs(distE20).toFixed(1) + "×ATR from EMA20)") +
@@ -3018,6 +3103,10 @@ function renderXray(asset, an, candles, plan, source, levels) {
       ? "classic — stops are always honored, cut on a confirmed flip."
       : "the stop is a decision point: if it's hit while the engine still reads the same direction, HOLD (don't realize the loss), buy the low once to average down, close only on a genuine signal flip or an emergency exit before liquidation — the one true floor.");
   li("Winning-side management", "breakeven lock at +1R · 1.6×ATR trail past +1.5R · target extends while momentum stays STRONG · profit banked early when belief fades · stops never widen.");
+  const fc = forecastPath(an, 24);
+  li("Forward projection (24 bars)", "the model projects " + (fc.dir > 0 ? "upward" : fc.dir < 0 ? "downward" : "flat") +
+    " drift of " + (fc.driftPct >= 0 ? "+" : "") + fc.driftPct.toFixed(1) + "% with a ±1σ range of roughly ±" + fc.bandPct.toFixed(1) +
+    "% (68% band) — drawn as the cone on the Candles view. This is a probabilistic forecast from current drift and volatility, NOT real future data; treat the band, not the line, as the honest expectation.");
 }
 
 /* ---------- backtest UI ---------- */
@@ -3032,7 +3121,10 @@ async function runBacktests() {
     for (const tf of Object.keys(TIMEFRAMES)) {
       const entry = await getCandles(state.asset, tf, 5 * 60 * 1000);
       if (!entry) continue;   // offline — never backtest invented data
-      rows.push({ tf, source: entry.source, bt: backtest(entry.candles) });
+      // run BOTH strategies on the same live history so you can compare and choose
+      rows.push({ tf, source: entry.source, bt: backtest(entry.candles),
+                  composite: backtest(entry.candles, "composite"),
+                  pullback: backtest(entry.candles, "pullback") });
     }
     if (!rows.length) {
       const box = $("btResults");
@@ -3068,6 +3160,37 @@ function renderBacktest(asset, rows) {
   addTile(tiles, "Max drawdown", st.n ? st.maxDD.toFixed(2) + " R" : "—", "peak-to-trough");
   addTile(tiles, "Buy & hold", (selRow.bt.buyHoldPct >= 0 ? "+" : "") + selRow.bt.buyHoldPct.toFixed(1) + "%", "same window, for comparison");
   box.appendChild(tiles);
+
+  // strategy comparison — which strategy actually made more money on this history
+  if (selRow.composite && selRow.pullback) {
+    const cmp = el("div");
+    cmp.style.marginTop = "14px";
+    cmp.appendChild(el("h2", "", "Which strategy wins on " + asset.id + " " + TIMEFRAMES[selRow.tf].label + "?"));
+    const wrapC = el("div", "table-wrap");
+    const t = el("table");
+    const th = el("thead"); const hr = el("tr");
+    for (const [h, n] of [["Strategy", 0], ["Trades", 1], ["Win rate", 1], ["Profit factor", 1], ["Avg trade", 1], ["Net R", 1]]) hr.appendChild(el("th", n ? "num" : "", h));
+    th.appendChild(hr); t.appendChild(th);
+    const tb = el("tbody");
+    const strat = [["Composite (14-signal)", selRow.composite.stats], ["Trend Pullback", selRow.pullback.stats]];
+    const winner = strat[0][1].netR >= strat[1][1].netR ? 0 : 1;
+    strat.forEach(([name, s], idx) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", "", name + (idx === winner ? " ✓ better here" : "")));
+      tr.appendChild(el("td", "num", String(s.n)));
+      tr.appendChild(el("td", "num", s.n ? s.winRate.toFixed(0) + "%" : "—"));
+      tr.appendChild(el("td", "num", s.n ? (isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞") : "—"));
+      tr.appendChild(el("td", "num", s.n ? fmtR(s.avgR) : "—"));
+      const ntd = el("td", "num", s.n ? fmtR(s.netR) : "—");
+      if (s.n) { ntd.style.color = s.netR >= 0 ? getCss("--delta-up") : getCss("--delta-down"); ntd.style.fontWeight = "650"; }
+      tr.appendChild(ntd);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); wrapC.appendChild(t); cmp.appendChild(wrapC);
+    cmp.appendChild(el("p", "plan-caveat", "Recommendation: on this asset/timeframe/history, " + strat[winner][0] +
+      " has the better net result — set it in Engine settings → Strategy. But re-check across timeframes and re-run periodically; the best strategy changes with the market regime."));
+    box.appendChild(cmp);
+  }
 
   const wrap = el("div", "table-wrap");
   wrap.style.marginTop = "14px";
@@ -3113,6 +3236,26 @@ function renderBacktest(asset, rows) {
   box.appendChild(el("p", "plan-caveat",
     "Honest read: a backtest over a few hundred bars is a smoke test, not proof — market regimes change, and results exclude fees, funding and slippage. " +
     "Trust the engine only as far as its forward paper-trading record above keeps confirming it."));
+}
+
+/* Probabilistic forward projection — NOT real future data (nobody has that).
+   Expected drift is the model's directional read (composite score) applied per
+   bar; the cone is a ±1σ volatility band that grows with √time (standard random-
+   walk uncertainty). It answers "where does the model expect price, and how wide
+   is the honest uncertainty" — a forecast, never a promise. */
+function forecastPath(an, F) {
+  const price = an.price, atr = an.atrNow;
+  const driftPerBar = clamp(an.score / 100, -0.6, 0.6) * atr * 0.30;
+  const mid = [], upper = [], lower = [];
+  for (let k = 1; k <= F; k++) {
+    const m = price + driftPerBar * k;
+    const band = atr * Math.sqrt(k);
+    mid.push(m); upper.push(m + band); lower.push(m - band);
+  }
+  return { mid, upper, lower,
+    driftPct: (driftPerBar * F / price) * 100,
+    bandPct: (atr * Math.sqrt(F) / price) * 100,
+    dir: an.score > 0 ? 1 : an.score < 0 ? -1 : 0 };
 }
 
 /* Real TradingView advanced chart — loaded lazily, degrades gracefully if the
@@ -3280,13 +3423,23 @@ function renderCharts(asset, an, candles, levels, plan) {
       legItem("▲▼ engine entries — exactly where the strategy fired (replay)", getCss("--series-3"), true);
       legItem("● exits (green won, red lost)", getCss("--text-muted"), true);
     }
+    // forward projection: extend the domain with future bars and a ±1σ cone
+    const F = 24;
+    const stepMs = TIMEFRAMES[state.tf].minutes * 60_000;
+    const fc = forecastPath(an, F);
+    const futureTimes = Array.from({ length: F }, (_, k) => times[times.length - 1] + (k + 1) * stepMs);
+    const extTimes = times.concat(futureTimes);
+    const startIdx = times.length;
+    const pad = (fut) => new Array(times.length).fill(null).concat(fut);
+    legItem("Forecast cone (±1σ projection — not certainty)", fc.dir >= 0 ? getCss("--status-good") : getCss("--status-critical"), true);
     renderChart($("priceChart"), $("priceTip"), {
-      times, tf: state.tf, height: 320, yRefs: priceRefs, position: posCfg, markers,
-      candlesData: shownCandles,
+      times: extTimes, tf: state.tf, height: 340, yRefs: priceRefs, position: posCfg, markers,
+      candlesData: shownCandles.concat(new Array(F).fill(null)),
+      projection: { startIdx, mid: pad(fc.mid), upper: pad(fc.upper), lower: pad(fc.lower), dir: fc.dir },
       priceTag: shownCandles.length ? shownCandles[shownCandles.length - 1].c : null,
       series: [
-        { name: "EMA 20", color: getCss("--series-2"), values: win(an.e20) },
-        { name: "EMA 50", color: getCss("--series-3"), values: win(an.e50) },
+        { name: "EMA 20", color: getCss("--series-2"), values: win(an.e20).concat(new Array(F).fill(null)) },
+        { name: "EMA 50", color: getCss("--series-3"), values: win(an.e50).concat(new Array(F).fill(null)) },
       ],
     });
   } else {
@@ -3567,11 +3720,18 @@ function wireControls() {
     $("cfgStop").value = String(state.cfg.stopMult);
     $("cfgTgt").value = String(state.cfg.tgtMult);
     $("cfgExit").value = state.cfg.exitStyle || "smart";
+    $("cfgStrategy").value = state.cfg.strategy || "composite";
     $("cfgPredictor").value = state.cfg.predictorUrl || "";
   };
   $("cfgExit").addEventListener("change", () => {
     state.cfg.exitStyle = $("cfgExit").value;
     saveCfg();
+    refresh(false);
+  });
+  $("cfgStrategy").addEventListener("change", () => {
+    state.cfg.strategy = $("cfgStrategy").value;
+    saveCfg();
+    state.btCache.clear();   // backtests are strategy-specific
     refresh(false);
   });
   $("cfgPredictor").addEventListener("change", () => {

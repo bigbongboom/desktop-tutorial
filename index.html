@@ -467,7 +467,7 @@
   <!-- AI auto-trader -->
   <section class="card">
     <h2>🤖 Auto-Trader AI — scans every chart, calls the shots</h2>
-    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It sizes every bet by the <strong>Kelly criterion</strong> — once it has 8+ closed trades it computes its own measured edge (win rate and payoff ratio) and commits the mathematically optimal fraction (half-Kelly for safety), <strong>10% to 80% of the fund, its own call</strong> — volatility-scaled, with leverage solved so liquidation stays ≥4×ATR away. <strong>Very selective, then patient:</strong> a setup must clear a 65% confidence floor, a proven-edge pre-trade backtest, a positive candle run-up, AND a 1-minute momentum check before any entry — the bot only takes trades it has real reason to think will win. <strong>Then it does NOT cut for a few cents:</strong> once in a proven high-conviction trade it gives it room to work, holding through ordinary noise (no death-by-a-thousand-cuts). It exits only on a genuine STRONG reversal of the signal, or the emergency before liquidation — the one true floor. Switch to Hard stops in Engine settings for classic always-honored stops. <strong>It refuses to chase and never snap-trades:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. Before committing, it runs a <strong>pre-trade backtest</strong> on that exact chart and only trades where the strategy has a proven positive edge (profit factor ≥1.1), and scans every prior candle for analogous setups — if the run-up historically resolved against the trade, it stands aside. Every new setup must also <strong>survive two consecutive scans still qualifying</strong> before any trade is placed (you'll see "analysing — confirmation 1/2" on the board), and after any close it stands down on that coin for 4+ bars (minimum 45 minutes, 3× longer after losses or manual closes) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
+    <p class="sub">An expert system managing <strong>its own account: $100 starting capital, compounding</strong>. Every refresh it sweeps all 4 markets × 5 timeframes at real-time prices and computes a <strong>measured confidence</strong> for each setup — nothing invented: current signal strength + the engine's real win rate and expectancy <em>replayed over that chart's entire history</em> + timeframe alignment + regime clarity + its live lesson record (hover any decision to see the arithmetic). It sizes every bet by the <strong>Kelly criterion</strong> — once it has 8+ closed trades it computes its own measured edge (win rate and payoff ratio) and commits the mathematically optimal fraction (half-Kelly for safety), <strong>10% to 80% of the fund, its own call</strong> — volatility-scaled, with leverage solved so liquidation stays ≥4×ATR away. <strong>Trades 15m and higher only</strong> — the 1-minute chart is scan-only (it's too noisy; the signal flips right after entry, which is why every reversed loser was a 1m trade), used just to time the fill. <strong>Very selective, then patient:</strong> a setup must clear a 65% confidence floor, a proven-edge pre-trade backtest, a positive candle run-up, a 1-minute momentum check, AND a signal-stability check (blocked if the signal is whipsawing) before any entry — and any coin/timeframe/direction that has built a losing record is hard-blocked. The bot only takes trades it has real reason to think will win, and learns to avoid the ones that don't. <strong>Then it does NOT cut for a few cents:</strong> once in a proven high-conviction trade it gives it room to work, holding through ordinary noise (no death-by-a-thousand-cuts). It exits only on a genuine STRONG reversal of the signal, or the emergency before liquidation — the one true floor. Switch to Hard stops in Engine settings for classic always-honored stops. <strong>It refuses to chase and never snap-trades:</strong> longs are blocked when RSI is overbought, price is stretched &gt;2×ATR from its mean, or it's pressing the band top without a fresh breakout (mirrored for shorts) — pullbacks are the entries. Before committing, it runs a <strong>pre-trade backtest</strong> on that exact chart and only trades where the strategy has a proven positive edge (profit factor ≥1.1), and scans every prior candle for analogous setups — if the run-up historically resolved against the trade, it stands aside. Every new setup must also <strong>survive two consecutive scans still qualifying</strong> before any trade is placed (you'll see "analysing — confirmation 1/2" on the board), and after any close it stands down on that coin for 4+ bars (minimum 45 minutes, 3× longer after losses or manual closes) so it never churns re-entries. A TradingView-style consensus rating (12 moving averages + 6 oscillators, the published gauge methodology) feeds every confidence score. Defensive half-size and STRONG-only in chop, full size in trends. Trades are only ever opened against verified live prices. <strong>Exits are managed live:</strong> stops park beyond real swing structure and targets stretch or trim with confidence and structure; once in a trade the AI locks breakeven at +1R, trails the stop past +1.5R, extends the target while momentum stays strongly in favor, banks profit early when it stops believing the target gets hit, and cuts immediately if the signal flips — stops never widen. <strong>It learns:</strong> every close is journaled below and feeds back into the rankings. Deterministic and auditable, paper-only by design: no web page should hold real exchange keys.</p>
     <label class="ai-toggle"><input type="checkbox" id="autoToggle"> <strong>Autopilot</strong> — let the AI place paper trades for me</label>
     <label class="ai-toggle"><input type="checkbox" id="wakeToggle"> <strong>Keep screen awake</strong> — for running the bot all day on this device</label>
     <p class="sub" style="margin-top:8px;">The bot runs autonomously while this tab is open, re-scanning every 60 seconds; if the tab sleeps or you go offline, it pauses (never guessing prices) and on waking reconciles every stop and target against the real candle history — nothing that happened while you were away is missed on exits.</p>
@@ -1225,6 +1225,22 @@ function entryQuality(an, candles, dir) {
     else if (pbNow < 0.08 && !freshBreak) chase = "pressing the bottom band without a fresh breakdown";
   }
   return { chase, distE20, freshBreak };
+}
+
+/* Signal stability — how choppy is the trend right now? Counts EMA20 crossings
+   over the last 12 bars. 0–2 = stable (safe to enter, the signal will persist);
+   3+ = whipsaw (the signal keeps flipping — DON'T enter, it'll reverse on you).
+   This is the direct fix for "entering as the signal switches". */
+function signalStability(ind) {
+  const { closes, e20 } = ind;
+  const i = closes.length - 1;
+  let crossings = 0;
+  for (let k = i - 11; k <= i; k++) {
+    if (k < 1 || e20[k] == null || e20[k - 1] == null) continue;
+    const a = closes[k - 1] - e20[k - 1], b = closes[k] - e20[k];
+    if (a !== 0 && b !== 0 && Math.sign(a) !== Math.sign(b)) crossings++;
+  }
+  return crossings;
 }
 
 /* Regime read from an analysis: how strongly is this chart actually trending? */
@@ -2403,6 +2419,8 @@ async function aiScanAndTrade() {
     // the last times an analogous candle setup occurred
     const analog = analogousOutcome(sc.candles, computeIndicators(sc.candles), dir, 8);
     const edge = { n: bt.stats.n, avgR: bt.stats.avgR, profitFactor: bt.stats.profitFactor, winRate: bt.stats.winRate };
+    // signal stability: choppy charts whipsaw and reverse right after entry
+    const stability = signalStability(computeIndicators(sc.candles));
     // 1-MINUTE micro-scan: read the 1m candles for this asset — very-short-term
     // momentum that can be the difference between a winning and losing fill
     const m1 = byAsset[sc.asset.id].find(o => o.tf === "1m");
@@ -2442,6 +2460,8 @@ async function aiScanAndTrade() {
       " · PRE-TRADE BACKTEST: " + edgeTxt +
       " · RUN-UP: " + analogTxt +
       (micro1m != null ? " · 1-MIN SCAN: momentum " + (micro1m > 0 ? "+" : "") + micro1m + (analog1m && analog1m.n >= 5 ? ", analogous 1m setups avg " + (analog1m.avgFwd >= 0 ? "+" : "") + analog1m.avgFwd.toFixed(2) + "%" : "") : "") +
+      " · STABILITY: " + stability + " EMA20 crossings/12 bars " + (stability >= 3 ? "(WHIPSAW — signal keeps flipping, blocked)" : "(stable)") +
+      (sc.tf === "1m" ? " · 1m is SCAN-ONLY (too noisy to trade — the losers were all 1m)" : "") +
       " · lessons: " + (learn.n ? learn.wins + "W/" + (learn.n - learn.wins) + "L past, rank " + (learn.adj >= 0 ? "+" : "") + learn.adj : "no prior record") +
       " · entry quality: " + (chase ? "DON'T CHASE — " + chase : "good (" + Math.abs(distE20).toFixed(1) + "×ATR from EMA20)") +
       " · exits: " + exits.note + extTxt + " · " + convDetail;
@@ -2449,7 +2469,7 @@ async function aiScanAndTrade() {
       asset: sc.asset, tf: sc.tf, dir, label: sc.an.label, score: sc.an.score,
       conviction, rank, entry: sc.an.price,
       stop: sc.an.price - dir * stopDist, target: sc.an.price + dir * tgtDist,
-      stopDist, atrNow: sc.an.atrNow, regime, rationale, chase, volFactor, edge, analog, micro1m, analog1m, sim: sc.source === "Simulated",
+      stopDist, atrNow: sc.an.atrNow, regime, rationale, chase, volFactor, edge, analog, micro1m, analog1m, stability, sim: sc.source === "Simulated",
     });
   }
   decisions.sort((a, b) => b.rank - a.rank);
@@ -2657,6 +2677,16 @@ function autoPilotExecute(decisions) {
     if (!meets(d) || openAssets.has(d.asset.id) || !(d.stopDist > 0)) continue;
     if (d.chase) continue;                            // never chase an exhausted move
     if (inCooldown(d.asset.id, d.tf)) continue;       // no instant re-entry after a close
+    // 1-MINUTE IS SCAN-ONLY: never place a primary trade on 1m — it's pure noise,
+    // the signal flips right after entry (every 'SIGNAL REVERSED' loser was 1m).
+    // 1m still feeds the micro-timing scan; it just doesn't get its own trades.
+    if (d.tf === "1m") continue;
+    // WHIPSAW GATE: if the signal keeps flipping (3+ EMA20 crossings in 12 bars),
+    // it will likely reverse right after entry — don't enter when it'll change.
+    if (d.stability >= 3) continue;
+    // LEARN-TO-AVOID: hard-block a setup that has an established losing record.
+    { const lr = learnAdjust(d.asset.id, d.tf, d.dir);
+      if (lr.n >= 2 && lr.wins / lr.n < 0.4) continue; }
     // defensive in chop: only STRONG signals qualify
     if (d.regime === "chop" && Math.abs(d.score) < cfg.strongTh) continue;
 
@@ -3180,6 +3210,11 @@ function renderXray(asset, an, candles, plan, source, levels) {
       (an.score >= 0 ? "in step with" : "check the 1m tile in Market Pulse for") +
       " the setup. A trade is blocked if 1-minute momentum is strongly against it, or analogous 1-minute setups historically went the wrong way — so the bot doesn't buy into a short-term dump.");
   }
+  const stab = signalStability(computeIndicators(candles));
+  li("Signal stability", stab + " EMA20 crossings in the last 12 bars — " + (stab >= 3
+    ? "WHIPSAW. The signal keeps flipping here, so it would likely reverse right after entry. Trade BLOCKED."
+    : "stable, the signal is persisting. Safe to enter.") +
+    (state.tf === "1m" ? " Note: 1-minute is scan-only — the bot never places primary trades on it (every reversed loser was a 1m trade); it trades 15m and higher and uses 1m only to time the fill." : ""));
   const eq = entryQuality(an, candles, dir);
   li("Entry quality (anti-chase)", eq.chase
     ? "BLOCKED — " + eq.chase + ". The bot waits for the pullback instead of buying the peak."

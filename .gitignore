@@ -1,0 +1,6 @@
+
+# bot secrets & runtime
+bot/.env
+bot/*.log
+bot/bot_state.json
+bot/__pycache__/

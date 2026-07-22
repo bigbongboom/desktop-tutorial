@@ -86,10 +86,16 @@ CFG = {
     "STATE_FILE":      os.getenv("STATE_FILE", "bot_state.json"),
 }
 
+# Make the console tolerate any character on Windows (cp1252 can't draw some).
+try:
+    import sys as _sys
+    _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler("trader.log")],
+    handlers=[logging.StreamHandler(), logging.FileHandler("trader.log", encoding="utf-8")],
 )
 log = logging.getLogger("trader")
 
@@ -513,9 +519,9 @@ def log_status(ex, state):
     # simulated balance: $100 base, each 1R = the risk-per-trade slice of it
     bal = 100 + cum_r * (CFG["RISK_PER_TRADE"] * 100)
     mode = "DRY-RUN (no real money)" if CFG["DRY_RUN"] else ("DEMO" if CFG["USE_DEMO"] else "LIVE REAL MONEY")
-    log.info("──────── STATUS [%s] ────────", mode)
-    log.info("Simulated balance: $%.2f  (from $100 base · %+.2fR realized)", bal, cum_r)
-    log.info("Closed trades: %d · win rate %.0f%% · open positions: %d",
+    log.info("========= STATUS [%s] =========", mode)
+    log.info("Simulated balance: $%.2f  (from $100 base, %+.2fR realized)", bal, cum_r)
+    log.info("Closed trades: %d, win rate %.0f%%, open positions: %d",
              len(closed), win_rate, len(open_ps))
     for p in open_ps:
         try:
@@ -527,8 +533,8 @@ def log_status(ex, state):
             log.info("  OPEN %s %s %s | entry %.2f",
                      "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"], p["entry"])
     if not open_ps and not closed:
-        log.info("  (no trades yet — scanning for a setup that passes all the gates)")
-    log.info("─────────────────────────────")
+        log.info("  (no trades yet - scanning for a setup that passes all the gates)")
+    log.info("===============================")
 
 def scan_and_trade(ex, state, equity):
     open_syms = {p["symbol"] for p in state["positions"] if p["status"] == "open"}

@@ -63,7 +63,8 @@ You do **not** need a server or a Raspberry Pi to start. Run it on your own comp
 2. Create a **real** API key — **trading permission only, NO withdrawals**, and
    **IP-whitelist it** to the machine running the bot.
 3. Put the real keys in `.env`, set `USE_DEMO=false` and `DRY_RUN=false`.
-4. Keep leverage low (`MAX_LEVERAGE=3` or less) and `EXIT_STYLE=hard` for real money.
+4. **For real money, set `MAX_LEVERAGE=3`** (a global hard cap) and keep
+   `EXIT_STYLE=hard`. The default sizing matches the dashboard and is aggressive.
 5. Run it — ideally on an always-on server (below), not your laptop.
 
 ---
@@ -86,10 +87,32 @@ nohup python3 trader.py &        # simplest
 
 ---
 
-## What each risk setting does
+## How it sizes trades (same as the dashboard)
 
-- `MAX_LEVERAGE` — hard cap on leverage. **Keep this low (2–3) for real money.**
-- `RISK_PER_TRADE` — fraction of equity lost if a trade hits its stop (0.01 = 1%).
+By default the bot sizes **exactly like the dashboard's AI account** — not a flat 1%:
+
+1. **Margin** — it deploys **10%→80% of equity** as margin on each trade, scaled by
+   confidence and blended with Kelly (`MAX_INVEST_FRAC` caps the top).
+2. **Risk** — it then solves the **leverage** so that, if the trade hits its stop, the
+   loss is a confidence-scaled **~2%→4% of equity** (`RISK_MIN_FRAC`/`RISK_MAX_FRAC`),
+   and **never more than 6%** (`RISK_CAP_FRAC`).
+3. **Leverage ceiling** — leverage never exceeds the per-market cap in
+   `MAX_LEVERAGE_MAP` (**BTC 40× / ETH 25× / SOL 20× / HYPE 5×**). It uses the *least*
+   leverage needed to hit the risk band; the cap only binds on very tight stops.
+
+> ⚠️ **This is aggressive.** 2–4% risk with up-to-40× leverage grows a demo account
+> fast but can also draw down hard on a losing streak. It's tuned to match the
+> dashboard you built. **For real money, set `MAX_LEVERAGE=3`** (a global hard cap over
+> every coin) and consider lowering `RISK_MAX_FRAC` — the per-market map stays, but no
+> trade will use more than 3× leverage.
+
+### Every setting
+
+- `MAX_LEVERAGE_MAP` — per-coin leverage ceiling, e.g. `BTC:40,ETH:25,SOL:20,HYPE:5`.
+- `MAX_LEVERAGE` — `0` trusts the map; `>0` is an extra **global hard cap** over all
+  coins. **Set this to 3 or less for real money.**
+- `RISK_MIN_FRAC` / `RISK_MAX_FRAC` — the risk-per-trade band (2%→4%), scaled by confidence.
+- `RISK_CAP_FRAC` — absolute ceiling on single-trade risk (6%).
 - `MAX_INVEST_FRAC` / `MAX_DEPLOY_FRAC` — most margin one trade / all trades can use.
 - `MAX_CONCURRENT` — how many positions open at once.
 - `MIN_CONFIDENCE` — the bot won't trade below this measured confidence (default 65).

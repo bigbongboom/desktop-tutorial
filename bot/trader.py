@@ -8,12 +8,17 @@ dashboard, but places real orders on Kraken Futures. It mirrors the dashboard's
 engine: a composite trend/momentum score, confidence gates, a pre-trade
 backtest, Kelly-fractional sizing, and managed exits.
 
-SAFETY-FIRST DEFAULTS (read config.py comments):
+SIZING — mirrors the dashboard's AI account exactly:
+  * Deploys 10%->80% of equity as MARGIN, scaled by confidence + Kelly.
+  * Solves leverage per trade so the loss-if-stopped lands on a confidence-scaled
+    risk band (~2%->4% of equity, hard cap 6%) — NOT a flat 1%.
+  * Per-market leverage ceiling: BTC 40x / ETH 25x / SOL 20x / HYPE 5x (MAX_LEVERAGE_MAP).
+
+SAFETY-FIRST DEFAULTS:
   * DRY_RUN = True         -> logs intended orders, places NOTHING
   * USE_DEMO = True        -> Kraken Futures DEMO/testnet (fake money)
   * EXIT_STYLE = "hard"    -> real stop losses (NOT diamond-hands) by default
-  * MAX_LEVERAGE = 3       -> modest leverage
-  * RISK_PER_TRADE = 0.01  -> 1% of equity risked per trade
+  * MAX_LEVERAGE = 0       -> 0 = use per-market map; set >0 as a global hard cap
   * DAILY_LOSS_LIMIT = 0.10 -> kill-switch: stop trading after -10% in a day
 
 Go live only after: (1) weeks of profitable DEMO trading, (2) you flip DRY_RUN
@@ -63,6 +68,22 @@ def _num(name, default):
     except ValueError:
         return default
 
+# Per-market EXCHANGE max leverage — mirrors the dashboard's maxLevFor().
+# The bot solves the *actual* leverage per trade to hit the risk band below; this
+# is only the ceiling it will never exceed for each coin.
+DEFAULT_MAX_LEV = {"BTC": 40, "ETH": 25, "SOL": 20, "HYPE": 5}
+
+def _parse_lev_map(s):
+    m = dict(DEFAULT_MAX_LEV)
+    for part in (s or "").split(","):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            try:
+                m[k.strip().upper()] = float(v)
+            except ValueError:
+                pass
+    return m
+
 CFG = {
     "DRY_RUN":         _bool("DRY_RUN", True),          # place no real orders
     "USE_DEMO":        _bool("USE_DEMO", True),         # Kraken Futures demo/testnet
@@ -74,9 +95,17 @@ CFG = {
     "STRONG_THRESHOLD":_num("STRONG_THRESHOLD", 45),
     "TRIGGER":         os.getenv("TRIGGER", "strong"),  # "strong" or "standard"
     "EXIT_STYLE":      os.getenv("EXIT_STYLE", "hard"), # "hard" (stops) or "diamond"
-    "MAX_LEVERAGE":    _num("MAX_LEVERAGE", 3),
-    "RISK_PER_TRADE":  _num("RISK_PER_TRADE", 0.01),    # fraction of equity risked
-    "MAX_INVEST_FRAC": _num("MAX_INVEST_FRAC", 0.40),   # max margin per trade (of equity)
+    # Leverage: per-market ceiling (BTC 40x / ETH 25x / SOL 20x / HYPE 5x) — same as
+    # the dashboard. MAX_LEVERAGE>0 acts as an extra hard cap over ALL markets (for
+    # cautious real-money use). 0 = trust the per-market map.
+    "MAX_LEVERAGE_MAP":_parse_lev_map(os.getenv("MAX_LEVERAGE_MAP", "")),
+    "MAX_LEVERAGE":    _num("MAX_LEVERAGE", 0),
+    # Risk band (fraction of equity lost if the trade hits its stop). The dashboard
+    # scales this ~2%->4% by confidence and never lets a single trade risk past 6%.
+    "RISK_MIN_FRAC":   _num("RISK_MIN_FRAC", 0.02),
+    "RISK_MAX_FRAC":   _num("RISK_MAX_FRAC", 0.04),
+    "RISK_CAP_FRAC":   _num("RISK_CAP_FRAC", 0.06),
+    "MAX_INVEST_FRAC": _num("MAX_INVEST_FRAC", 0.80),   # max margin per trade (of equity)
     "MAX_DEPLOY_FRAC": _num("MAX_DEPLOY_FRAC", 0.80),   # max total margin deployed
     "MAX_CONCURRENT":  int(_num("MAX_CONCURRENT", 2)),
     "MIN_NOTIONAL":    _num("MIN_NOTIONAL", 10),
@@ -360,12 +389,32 @@ def confidence(an, bt, regime):
     conf += 8 if regime == "trend" else (-4 if regime == "chop" else 0)
     return round(clamp(conf, 5, 95))
 
+def max_lev_for(symbol):
+    """Exchange leverage ceiling for this market's base coin (BTC 40x / ETH 25x /
+    SOL 20x / HYPE 5x by default), optionally tightened by a global MAX_LEVERAGE."""
+    base = symbol.split("/")[0].split(":")[0].upper().replace("XBT", "BTC")
+    cap = CFG["MAX_LEVERAGE_MAP"].get(base, 5)
+    if CFG["MAX_LEVERAGE"] and CFG["MAX_LEVERAGE"] > 0:
+        cap = min(cap, CFG["MAX_LEVERAGE"])
+    return max(1, cap)
+
+def conviction_risk_frac(conf):
+    """Risk-per-trade as a fraction of equity, scaled by confidence — mirrors the
+    dashboard's convictionRisk: ~2% at the confidence floor up to ~4% when very
+    confident, hard-capped at 6%."""
+    conf_norm = clamp((conf - CFG["MIN_CONFIDENCE"]) / max(95 - CFG["MIN_CONFIDENCE"], 1), 0, 1)
+    band = CFG["RISK_MIN_FRAC"] + conf_norm * (CFG["RISK_MAX_FRAC"] - CFG["RISK_MIN_FRAC"])
+    return clamp(band, CFG["RISK_MIN_FRAC"], CFG["RISK_CAP_FRAC"])
+
 def kelly_fraction(conf, journal):
+    """Margin to deploy as a fraction of equity (the dashboard's convictionInvest):
+    Kelly-blended, 10% at the confidence floor scaling toward 80% when very
+    confident and the track record supports it."""
     conf_norm = clamp((conf - 50) / 45, 0, 1)
-    conf_bet = 0.10 + conf_norm * 0.30
+    conf_bet = 0.10 + conf_norm * 0.70
     closed = [t for t in journal if t.get("r") is not None]
     if len(closed) < 8:
-        return conf_bet
+        return clamp(conf_bet, 0.10, CFG["MAX_INVEST_FRAC"])
     wins = [t for t in closed if t["r"] > 0]
     losses = [t for t in closed if t["r"] <= 0]
     W = len(wins) / len(closed)
@@ -474,8 +523,12 @@ TF_MIN = {"1m": 1, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 def run():
     log.info("=" * 60)
     log.info("Crypto Signal Desk — Kraken Futures bot starting")
-    log.info("DRY_RUN=%s  USE_DEMO=%s  EXIT_STYLE=%s  MAX_LEV=%s  RISK=%.1f%%",
-             CFG["DRY_RUN"], CFG["USE_DEMO"], CFG["EXIT_STYLE"], CFG["MAX_LEVERAGE"], CFG["RISK_PER_TRADE"] * 100)
+    lev_desc = " ".join("%s=%gx" % (k, v) for k, v in CFG["MAX_LEVERAGE_MAP"].items())
+    if CFG["MAX_LEVERAGE"] and CFG["MAX_LEVERAGE"] > 0:
+        lev_desc += " (global cap %gx)" % CFG["MAX_LEVERAGE"]
+    log.info("DRY_RUN=%s  USE_DEMO=%s  EXIT_STYLE=%s  RISK=%.0f-%.0f%% (cap %.0f%%)  MAX_LEV: %s",
+             CFG["DRY_RUN"], CFG["USE_DEMO"], CFG["EXIT_STYLE"],
+             CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100, lev_desc)
     if not CFG["DRY_RUN"] and not CFG["USE_DEMO"]:
         log.warning("!!! LIVE REAL-MONEY MODE — orders will be placed with real funds !!!")
         time.sleep(5)
@@ -516,8 +569,11 @@ def log_status(ex, state):
     wins = [t for t in closed if t["r"] > 0]
     cum_r = sum(t["r"] for t in closed)
     win_rate = (len(wins) / len(closed) * 100) if closed else 0
-    # simulated balance: $100 base, each 1R = the risk-per-trade slice of it
-    bal = 100 + cum_r * (CFG["RISK_PER_TRADE"] * 100)
+    # simulated balance: $100 base; each trade's PnL = its R * the risk $ it staked
+    # (variable 2-4% per trade, like the dashboard — not a flat 1%).
+    bal = 100.0
+    for t in closed:
+        bal += t["r"] * bal * t.get("risk_frac", CFG["RISK_MIN_FRAC"])
     mode = "DRY-RUN (no real money)" if CFG["DRY_RUN"] else ("DEMO" if CFG["USE_DEMO"] else "LIVE REAL MONEY")
     log.info("========= STATUS [%s] =========", mode)
     log.info("Simulated balance: $%.2f  (from $100 base, %+.2fR realized)", bal, cum_r)
@@ -586,25 +642,46 @@ def scan_and_trade(ex, state, equity):
 def open_trade(ex, state, d, equity, invested):
     an = d["an"]
     price = an["price"]; atr_now = an["atr"]
+    stop_d = CFG["STOP_ATR"] * atr_now
+    stop_pct = stop_d / price
+    if stop_pct <= 0:
+        return
+
+    # --- Sizing that mirrors the dashboard exactly -----------------------------
+    # 1) Deploy 10%->80% of equity as MARGIN, by confidence + Kelly (convictionInvest).
     frac = kelly_fraction(d["conf"], state["journal"])
     deploy_left = equity * CFG["MAX_DEPLOY_FRAC"] - invested
     invest = min(max(equity * frac, equity * 0.10), equity * CFG["MAX_INVEST_FRAC"], deploy_left)
-    if invest < equity * 0.10:
+    # Never let the margin alone (at 1x) risk more than the 6% cap if stopped.
+    invest = min(invest, equity * CFG["RISK_CAP_FRAC"] / stop_pct)
+    if invest < equity * 0.10 - 1e-9:
         return
-    stop_d = CFG["STOP_ATR"] * atr_now
-    stop_pct = stop_d / price
-    # leverage solved for the risk target, capped
-    risk_target = equity * CFG["RISK_PER_TRADE"]
-    lev = max(1, min(CFG["MAX_LEVERAGE"], round(risk_target / (invest * stop_pct)))) if stop_pct > 0 else 1
+    # 2) Solve leverage so the loss-if-stopped lands on the conviction risk band
+    #    (~2%->4%, hard cap 6%), never exceeding this market's exchange max.
+    risk_frac = conviction_risk_frac(d["conf"])
+    risk_target = equity * risk_frac
+    lev_cap = max_lev_for(d["symbol"])
+    lev = max(1, min(lev_cap, round(risk_target / (invest * stop_pct))))
     notional = invest * lev
+    # Cap notional so leverage rounding can't push realized risk past the 6% cap.
+    max_notional = equity * CFG["RISK_CAP_FRAC"] / stop_pct
+    if notional > max_notional:
+        notional = max_notional
+        lev = max(1, notional / invest)
     if notional < CFG["MIN_NOTIONAL"]:
         return
+    risk_used = notional * stop_pct
+    risk_pct_used = risk_used / equity if equity else 0
+    # ---------------------------------------------------------------------------
+
     qty = notional / price
     stop = price - d["dir"] * stop_d
     tgt = price + d["dir"] * CFG["TARGET_ATR"] * atr_now
     side = "buy" if d["dir"] > 0 else "sell"
-    log.info("OPEN %s %s %s  conf=%d%%  score=%+d  qty=%.6f lev=%dx  entry~%.2f stop=%.2f tgt=%.2f",
-             side.upper(), d["symbol"], d["tf"], d["conf"], d["score"], qty, lev, price, stop, tgt)
+    log.info("OPEN %s %s %s  conf=%d%%  score=%+d  margin=$%.2f lev=%.1fx notional=$%.2f  "
+             "risk=%.1f%%  entry~%.2f stop=%.2f tgt=%.2f",
+             side.upper(), d["symbol"], d["tf"], d["conf"], d["score"], invest, lev, notional,
+             risk_pct_used * 100, price, stop, tgt)
     try:
         ex.create_order(d["symbol"], side, qty)
     except Exception as e:
@@ -613,7 +690,8 @@ def open_trade(ex, state, d, equity, invested):
     state["positions"].append({
         "symbol": d["symbol"], "tf": d["tf"], "dir": d["dir"], "entry": price,
         "stop": stop, "tgt": tgt, "qty": qty, "lev": lev, "invested": invest,
-        "risk": stop_d, "conf": d["conf"], "opened": time.time(), "status": "open",
+        "risk": stop_d, "risk_frac": risk_pct_used, "conf": d["conf"],
+        "opened": time.time(), "status": "open",
     })
 
 def manage_positions(ex, state):
@@ -663,7 +741,8 @@ def close_trade(ex, state, p, price, result, uR):
         return
     p["status"] = "closed"; p["result"] = result; p["exit"] = price; p["r"] = uR
     state["journal"].append({"t": int(time.time()), "symbol": p["symbol"], "tf": p["tf"],
-                             "dir": p["dir"], "result": result, "r": uR})
+                             "dir": p["dir"], "result": result, "r": uR,
+                             "risk_frac": p.get("risk_frac", CFG["RISK_MIN_FRAC"])})
 
 if __name__ == "__main__":
     run()

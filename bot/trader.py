@@ -498,9 +498,37 @@ def run():
                 scan_and_trade(ex, state, equity)
 
             save_state(state)
+            log_status(ex, state)
         except Exception as e:
             log.exception("loop error: %s", e)
         time.sleep(CFG["POLL_SECONDS"])
+
+def log_status(ex, state):
+    """Print a clear balance + positions summary every cycle (and to trader.log)."""
+    closed = [t for t in state["journal"] if t.get("r") is not None]
+    open_ps = [p for p in state["positions"] if p["status"] == "open"]
+    wins = [t for t in closed if t["r"] > 0]
+    cum_r = sum(t["r"] for t in closed)
+    win_rate = (len(wins) / len(closed) * 100) if closed else 0
+    # simulated balance: $100 base, each 1R = the risk-per-trade slice of it
+    bal = 100 + cum_r * (CFG["RISK_PER_TRADE"] * 100)
+    mode = "DRY-RUN (no real money)" if CFG["DRY_RUN"] else ("DEMO" if CFG["USE_DEMO"] else "LIVE REAL MONEY")
+    log.info("──────── STATUS [%s] ────────", mode)
+    log.info("Simulated balance: $%.2f  (from $100 base · %+.2fR realized)", bal, cum_r)
+    log.info("Closed trades: %d · win rate %.0f%% · open positions: %d",
+             len(closed), win_rate, len(open_ps))
+    for p in open_ps:
+        try:
+            cur = ex.candles(p["symbol"], p["tf"], 2)[-1]["c"]
+            uR = p["dir"] * (cur - p["entry"]) / p["risk"] if p["risk"] else 0
+            log.info("  OPEN %s %s %s | entry %.2f now %.2f | %+.2fR",
+                     "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"], p["entry"], cur, uR)
+        except Exception:
+            log.info("  OPEN %s %s %s | entry %.2f",
+                     "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"], p["entry"])
+    if not open_ps and not closed:
+        log.info("  (no trades yet — scanning for a setup that passes all the gates)")
+    log.info("─────────────────────────────")
 
 def scan_and_trade(ex, state, equity):
     open_syms = {p["symbol"] for p in state["positions"] if p["status"] == "open"}

@@ -4,3 +4,8 @@ bot/.env
 bot/*.log
 bot/bot_state.json
 bot/__pycache__/
+
+# runtime logs / state anywhere
+*.log
+bot_state.json
+__pycache__/

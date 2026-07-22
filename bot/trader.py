@@ -37,6 +37,21 @@ except ImportError:
 # --------------------------------------------------------------------------
 # Configuration (override via environment variables / a .env file)
 # --------------------------------------------------------------------------
+def _load_env_file(path=".env"):
+    """Minimal .env loader (no extra dependency) so KEY=value lines are picked up."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+    except FileNotFoundError:
+        pass
+
+_load_env_file()
+
 def _bool(name, default):
     v = os.getenv(name)
     return default if v is None else v.strip().lower() in ("1", "true", "yes", "on")

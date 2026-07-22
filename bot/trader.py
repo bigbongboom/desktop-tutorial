@@ -382,7 +382,9 @@ class Exchange:
             "secret": os.getenv("KRAKEN_API_SECRET", ""),
             "enableRateLimit": True,
         })
-        if CFG["USE_DEMO"]:
+        # Only use the demo endpoint when actually placing orders. In dry-run we
+        # read PUBLIC market data from production (more reliable, real symbols).
+        if CFG["USE_DEMO"] and not CFG["DRY_RUN"]:
             self.ex.set_sandbox_mode(True)  # Kraken Futures demo/testnet
         self.ex.load_markets()
         self.trade_symbols = self._resolve_symbols([b.strip().upper() for b in CFG["SYMBOLS"] if b.strip()])
@@ -407,8 +409,11 @@ class Exchange:
             else:
                 log.warning("no perpetual market found for %s on this exchange", base)
         if not out:
-            log.error("Could not resolve ANY trading symbols. The exchange may be "
-                      "unreachable, or these coins aren't listed. Check your connection.")
+            log.error("Could not resolve ANY trading symbols. Here are up to 20 "
+                      "perpetual symbols this exchange DOES offer (share these if it fails):")
+            swaps = [m["symbol"] for m in markets if m.get("swap")][:20]
+            for s in swaps:
+                log.error("  available: %s", s)
         return out
 
     def candles(self, symbol, timeframe, limit=400):

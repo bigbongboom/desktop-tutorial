@@ -66,7 +66,7 @@ def _num(name, default):
 CFG = {
     "DRY_RUN":         _bool("DRY_RUN", True),          # place no real orders
     "USE_DEMO":        _bool("USE_DEMO", True),         # Kraken Futures demo/testnet
-    "SYMBOLS":         os.getenv("SYMBOLS", "BTC/USD:USD,ETH/USD:USD,SOL/USD:USD").split(","),
+    "SYMBOLS":         os.getenv("SYMBOLS", "BTC,ETH,SOL").split(","),  # base coins; resolved to real perp symbols
     "TIMEFRAMES":      os.getenv("TIMEFRAMES", "15m,1h,4h,1d").split(","),  # NEVER 1m — noise
     "POLL_SECONDS":    int(_num("POLL_SECONDS", 60)),
     "MIN_CONFIDENCE":  _num("MIN_CONFIDENCE", 65),      # confidence floor
@@ -385,6 +385,31 @@ class Exchange:
         if CFG["USE_DEMO"]:
             self.ex.set_sandbox_mode(True)  # Kraken Futures demo/testnet
         self.ex.load_markets()
+        self.trade_symbols = self._resolve_symbols([b.strip().upper() for b in CFG["SYMBOLS"] if b.strip()])
+        self._equity_warned = False
+
+    def _resolve_symbols(self, bases):
+        """Find the real linear USD perpetual symbol for each requested base coin,
+        so we never hardcode an exchange-specific ticker (Kraken calls BTC 'XBT')."""
+        out = []
+        markets = list(self.ex.markets.values())
+        for base in bases:
+            aliases = {base}
+            if base == "BTC":
+                aliases.add("XBT")
+            cands = [m for m in markets
+                     if m.get("base") in aliases and m.get("swap") and m.get("active", True)]
+            linear = [m for m in cands if m.get("linear")]
+            pref = [m for m in linear if m.get("settle") in ("USD", "USDC")] or linear or cands
+            if pref:
+                out.append(pref[0]["symbol"])
+                log.info("resolved %s -> %s", base, pref[0]["symbol"])
+            else:
+                log.warning("no perpetual market found for %s on this exchange", base)
+        if not out:
+            log.error("Could not resolve ANY trading symbols. The exchange may be "
+                      "unreachable, or these coins aren't listed. Check your connection.")
+        return out
 
     def candles(self, symbol, timeframe, limit=400):
         raw = self.ex.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -396,7 +421,10 @@ class Exchange:
             # USD collateral; fields vary by account — fall back gracefully
             return float(bal.get("USD", {}).get("total") or bal.get("total", {}).get("USD") or 0) or 100.0
         except Exception as e:
-            log.warning("equity fetch failed (%s); assuming 100 for sizing", e)
+            if not self._equity_warned:
+                log.warning("equity fetch failed (%s) — assuming 100 for sizing. "
+                            "This is expected in dry-run without API keys.", e)
+                self._equity_warned = True
             return 100.0
 
     def create_order(self, symbol, side, amount, params=None):
@@ -475,8 +503,7 @@ def scan_and_trade(ex, state, equity):
         return
     invested = sum(p.get("invested", 0) for p in state["positions"] if p["status"] == "open")
     candidates = []
-    for symbol in CFG["SYMBOLS"]:
-        symbol = symbol.strip()
+    for symbol in ex.trade_symbols:
         if not symbol or symbol in open_syms:
             continue
         for tf in CFG["TIMEFRAMES"]:

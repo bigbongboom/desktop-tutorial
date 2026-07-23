@@ -52,7 +52,7 @@ When the bot starts it also opens a **local dashboard**. Look for this line in t
 console:
 
 ```
-*** WATCH THE BOT LIVE IN YOUR BROWSER:  http://localhost:8787  ***
+*** WATCH THE BOT LIVE IN YOUR BROWSER:  http://localhost:8899  ***
 ```
 
 Open that address. You'll see, updating every few seconds:
@@ -66,7 +66,7 @@ Open that address. You'll see, updating every few seconds:
 
 The page is served only on your own computer (`localhost`) — it is never exposed to
 the internet, and your API keys are never shown on it or sent anywhere. Set
-`WEB_ENABLED=false` in `.env` to turn it off, or change `WEB_PORT` if 8787 is taken.
+`WEB_ENABLED=false` in `.env` to turn it off, or change `WEB_PORT` if 8899 is taken.
 
 ## Step 2 — Paper-trade on the Kraken demo (fake money, real fills)
 

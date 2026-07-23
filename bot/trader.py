@@ -115,7 +115,7 @@ CFG = {
     "STATE_FILE":      os.getenv("STATE_FILE", "bot_state.json"),
     "WEB_ENABLED":     _bool("WEB_ENABLED", True),      # serve the local watch page
     "WEB_HOST":        os.getenv("WEB_HOST", "127.0.0.1"),  # localhost only — never exposed
-    "WEB_PORT":        int(_num("WEB_PORT", 8787)),
+    "WEB_PORT":        int(_num("WEB_PORT", 8899)),  # 8787 avoided (construction AI uses it)
 }
 
 # Live snapshot the local web page reads (never persisted, never leaves the laptop).

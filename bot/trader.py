@@ -380,13 +380,59 @@ def backtest(candles):
             "avg_r": ((gw - gl) / n) if n else 0,
             "profit_factor": (gw / gl) if gl > 0 else (999 if gw > 0 else 0)}
 
-def confidence(an, bt, regime):
+def tv_rating(candles):
+    """TradingView-style consensus (12 MAs + 6 oscillators) — a faithful port of the
+    dashboard's tvRating. Returns a -1..+1 score (buy minus sell, over total votes)."""
+    closes = [c["c"] for c in candles]
+    i = len(closes) - 1
+    price = closes[i]
+    buy = sell = total = 0
+    def vote(b, s):
+        nonlocal buy, sell, total
+        total += 1
+        if b: buy += 1
+        elif s: sell += 1
+    for p in (10, 20, 30, 50, 100, 200):
+        if i + 1 >= p:
+            avg = sum(closes[i - p + 1:i + 1]) / p
+            vote(price > avg, price < avg)
+            e = ema(closes, p)[i]
+            if e is not None:
+                vote(price > e, price < e)
+    r = rsi(closes, 14)[i]
+    if r is not None: vote(r < 30, r > 70)
+    stk = stochastic(candles, 14)
+    if stk[i] is not None: vote(stk[i] < 20, stk[i] > 80)
+    line, signal, _ = macd(closes)
+    if line[i] is not None and signal[i] is not None:
+        vote(line[i] > signal[i], line[i] < signal[i])
+    if i >= 10: vote(closes[i] > closes[i - 10], closes[i] < closes[i - 10])
+    if i >= 19:
+        n = 20
+        tp = [(candles[k]["h"] + candles[k]["l"] + candles[k]["c"]) / 3 for k in range(i - n + 1, i + 1)]
+        mean = sum(tp) / n
+        md = sum(abs(x - mean) for x in tp) / n
+        cci = (tp[-1] - mean) / (0.015 * md) if md > 0 else 0
+        vote(cci < -100, cci > 100)
+    if i >= 13:
+        hh = max(candles[k]["h"] for k in range(i - 13, i + 1))
+        ll = min(candles[k]["l"] for k in range(i - 13, i + 1))
+        wr = ((hh - price) / (hh - ll)) * -100 if hh > ll else -50
+        vote(wr < -80, wr > -20)
+    return {"score": (buy - sell) / total if total else 0, "buy": buy, "sell": sell, "total": total}
+
+def confidence(an, bt, trend_strength, agree, tv_pts):
+    """Measured confidence — mirrors the dashboard's conviction formula EXACTLY so the
+    bot clears the same 65 floor the dashboard does (the old version was missing the
+    alignment and TV terms, which is why the bot almost never traded)."""
     conf = 25
-    conf += min(abs(an["score"]), 70) * 0.35
-    if bt["n"]:
+    conf += min(abs(an["score"]), 70) * 0.35            # signal strength
+    if bt["n"]:                                          # replayed edge on this chart
         shrink = bt["n"] / (bt["n"] + 10)
         conf += clamp(clamp(bt["avg_r"], -1, 1) * shrink * 30, -15, 15)
-    conf += 8 if regime == "trend" else (-4 if regime == "chop" else 0)
+    conf += min(agree, 3) * 5                            # timeframe alignment (up to +15)
+    conf += clamp(trend_strength, 0, 1.5) * 8           # regime clarity (up to +12)
+    conf += tv_pts                                       # TradingView consensus (±12)
     return round(clamp(conf, 5, 95))
 
 def max_lev_for(symbol):
@@ -597,14 +643,19 @@ def scan_and_trade(ex, state, equity):
     if len(open_syms) >= CFG["MAX_CONCURRENT"]:
         return
     invested = sum(p.get("invested", 0) for p in state["positions"] if p["status"] == "open")
+    enter_th = CFG["ENTER_THRESHOLD"]
+    strong_th = CFG["STRONG_THRESHOLD"]
+    need = strong_th if CFG["TRIGGER"] == "strong" else enter_th
     candidates = []
+    near = []   # near-misses: (abs_score, "SYMBOL tf DIR — why it was blocked")
     for symbol in ex.trade_symbols:
         if not symbol or symbol in open_syms:
             continue
+        # Pass 1: analyze EVERY timeframe for this symbol so we can score cross-
+        # timeframe alignment (the confidence term the old bot was missing).
+        tfs = {}
         for tf in CFG["TIMEFRAMES"]:
             tf = tf.strip()
-            if tf == "1m":     # scan-only, never a primary trade
-                continue
             try:
                 candles = ex.candles(symbol, tf, 400)
             except Exception as e:
@@ -612,28 +663,53 @@ def scan_and_trade(ex, state, equity):
                 continue
             if len(candles) < 210:
                 continue
-            an = analyze(candles)
-            need = CFG["STRONG_THRESHOLD"] if CFG["TRIGGER"] == "strong" else CFG["ENTER_THRESHOLD"]
-            if abs(an["score"]) < need:
+            tfs[tf] = {"candles": candles, "an": analyze(candles)}
+        # Pass 2: evaluate each tradable timeframe as a candidate.
+        for tf, o in tfs.items():
+            if tf == "1m":     # scan-only, never a primary trade
                 continue
+            an = o["an"]; candles = o["candles"]
+            base = symbol.split("/")[0]
             d = 1 if an["score"] > 0 else -1
-            regime = regime_of(an)
-            if regime == "chop" and abs(an["score"]) < CFG["STRONG_THRESHOLD"]:
+            dirtxt = "LONG" if d > 0 else "SHORT"
+            def miss(reason):
+                near.append((abs(an["score"]), "%s %s %s — %s" % (base, tf, dirtxt, reason)))
+            if abs(an["score"]) < need:
+                miss("score %+d, needs %s%d to trigger" % (an["score"], "±", int(need)))
                 continue
+            li = len(an["e20"]) - 1
+            trend_strength = (abs(an["e20"][li] - an["e50"][li]) / an["atr"]
+                              if (an["e20"][li] is not None and an["e50"][li] is not None and an["atr"] > 0) else 0)
+            regime = "trend" if trend_strength >= 1 else "mixed" if trend_strength >= 0.5 else "chop"
+            if regime == "chop" and abs(an["score"]) < strong_th:
+                miss("chop regime, score %+d below STRONG" % an["score"]); continue
             closes = [c["c"] for c in candles]
             if signal_stability(closes, an["e20"]) >= 3:      # whipsaw gate
-                continue
+                miss("whipsaw (signal keeps flipping)"); continue
             bt = backtest(candles)
             if bt["n"] >= 6 and (bt["avg_r"] <= 0 or bt["profit_factor"] < 1.2):
-                continue                                      # unproven edge
-            conf = confidence(an, bt, regime)
+                miss("backtest edge too weak (PF %.2f, %+0.2fR over %d trades)"
+                     % (bt["profit_factor"], bt["avg_r"], bt["n"])); continue
+            # timeframe alignment: how many OTHER timeframes of this symbol agree
+            agree = sum(1 for otf, oo in tfs.items()
+                        if otf != tf and abs(oo["an"]["score"]) >= enter_th
+                        and (1 if oo["an"]["score"] > 0 else -1) == d)
+            tv = tv_rating(candles)
+            tv_pts = clamp(tv["score"] * d * 12, -12, 12)
+            conf = confidence(an, bt, trend_strength, agree, tv_pts)
             if conf < CFG["MIN_CONFIDENCE"]:
-                continue
+                miss("confidence %d%%, needs %d%%" % (conf, int(CFG["MIN_CONFIDENCE"]))); continue
             if in_cooldown(state["journal"], symbol, TF_MIN.get(tf, 60)):
-                continue
+                miss("cooldown after a recent trade"); continue
             candidates.append({"symbol": symbol, "tf": tf, "dir": d, "score": an["score"],
-                               "conf": conf, "an": an, "regime": regime})
+                               "conf": conf, "an": an, "regime": regime, "agree": agree,
+                               "tv": tv["score"]})
     if not candidates:
+        if near:
+            near.sort(reverse=True)
+            log.info("No trade this scan. Closest setup: %s", near[0][1])
+        else:
+            log.info("No trade this scan — no signal on any chart yet (all inside the neutral band).")
         return
     candidates.sort(key=lambda c: c["conf"], reverse=True)
     best = candidates[0]

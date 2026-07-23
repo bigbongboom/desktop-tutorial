@@ -137,7 +137,10 @@ By default the bot sizes **exactly like the dashboard's AI account** — not a f
 - `RISK_CAP_FRAC` — absolute ceiling on single-trade risk (6%).
 - `MAX_INVEST_FRAC` / `MAX_DEPLOY_FRAC` — most margin one trade / all trades can use.
 - `MAX_CONCURRENT` — how many positions open at once.
-- `MIN_CONFIDENCE` — the bot won't trade below this measured confidence (default 65).
+- `TRIGGER` — `standard` trades regular signals (score ≥18, the balanced default);
+  `strong` only takes very strong ones (≥45) — far fewer trades, highest quality.
+- `MIN_CONFIDENCE` — the bot won't trade below this measured confidence (default 63).
+  Lower it (≈58) to trade more, raise it (≈68) to be pickier.
 - `EXIT_STYLE` — `hard` uses real stop losses (recommended). `diamond` holds through
   drawdown and only exits on a strong reversal — higher variance, can lose more per trade.
 - `DAILY_LOSS_LIMIT` — daily drawdown kill-switch.

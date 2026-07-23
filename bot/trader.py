@@ -91,10 +91,10 @@ CFG = {
     "SYMBOLS":         os.getenv("SYMBOLS", "BTC,ETH,SOL").split(","),  # base coins; resolved to real perp symbols
     "TIMEFRAMES":      os.getenv("TIMEFRAMES", "15m,1h,4h,1d").split(","),  # NEVER 1m — noise
     "POLL_SECONDS":    int(_num("POLL_SECONDS", 60)),
-    "MIN_CONFIDENCE":  _num("MIN_CONFIDENCE", 65),      # confidence floor
+    "MIN_CONFIDENCE":  _num("MIN_CONFIDENCE", 63),      # confidence floor ("balanced")
     "ENTER_THRESHOLD": _num("ENTER_THRESHOLD", 18),
     "STRONG_THRESHOLD":_num("STRONG_THRESHOLD", 45),
-    "TRIGGER":         os.getenv("TRIGGER", "strong"),  # "strong" or "standard"
+    "TRIGGER":         os.getenv("TRIGGER", "standard"),  # "standard" (±18) or "strong" (±45 only)
     "EXIT_STYLE":      os.getenv("EXIT_STYLE", "hard"), # "hard" (stops) or "diamond"
     # Leverage: per-market ceiling (BTC 40x / ETH 25x / SOL 20x / HYPE 5x) — same as
     # the dashboard. MAX_LEVERAGE>0 acts as an extra hard cap over ALL markets (for

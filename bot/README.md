@@ -46,6 +46,28 @@ You do **not** need a server or a Raspberry Pi to start. Run it on your own comp
    exactly what it *would* trade. Let it run for a while. This proves the strategy
    logic end-to-end with zero risk.
 
+### Watch it live in your browser
+
+When the bot starts it also opens a **local dashboard**. Look for this line in the
+console:
+
+```
+*** WATCH THE BOT LIVE IN YOUR BROWSER:  http://localhost:8787  ***
+```
+
+Open that address. You'll see, updating every few seconds:
+
+- **Balance, win rate, realized R** and every **open position** with its live
+  unrealized profit, leverage, margin and risk.
+- **The live scan** — every chart (BTC/ETH/SOL × each timeframe) with its current
+  score, regime and confidence, and for anything it *isn't* trading, the exact gate
+  that blocked it (e.g. "confidence 58%, needs 65%"). No more guessing why it's quiet.
+- **TradingView charts** of the markets it's analysing.
+
+The page is served only on your own computer (`localhost`) — it is never exposed to
+the internet, and your API keys are never shown on it or sent anywhere. Set
+`WEB_ENABLED=false` in `.env` to turn it off, or change `WEB_PORT` if 8787 is taken.
+
 ## Step 2 — Paper-trade on the Kraken demo (fake money, real fills)
 
 1. Go to **https://demo-futures.kraken.com**, sign up (free), and get demo funds.

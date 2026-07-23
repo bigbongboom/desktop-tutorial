@@ -113,7 +113,13 @@ CFG = {
     "TARGET_ATR":      _num("TARGET_ATR", 2.5),
     "DAILY_LOSS_LIMIT":_num("DAILY_LOSS_LIMIT", 0.10),  # kill-switch
     "STATE_FILE":      os.getenv("STATE_FILE", "bot_state.json"),
+    "WEB_ENABLED":     _bool("WEB_ENABLED", True),      # serve the local watch page
+    "WEB_HOST":        os.getenv("WEB_HOST", "127.0.0.1"),  # localhost only — never exposed
+    "WEB_PORT":        int(_num("WEB_PORT", 8787)),
 }
+
+# Live snapshot the local web page reads (never persisted, never leaves the laptop).
+LATEST = {"status": None, "analysis": [], "closest": None, "scan_ts": None}
 
 # Make the console tolerate any character on Windows (cp1252 can't draw some).
 try:
@@ -564,6 +570,170 @@ def in_cooldown(journal, symbol, tf_minutes):
 TF_MIN = {"1m": 1, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 
 # --------------------------------------------------------------------------
+# Local web page — watch the bot run (served on localhost only, no keys exposed)
+# --------------------------------------------------------------------------
+WATCH_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crypto Signal Desk — Bot Monitor</title>
+<script src="https://s3.tradingview.com/tv.js"></script>
+<style>
+  :root{--bg:#0b0e14;--card:#141922;--line:#232a36;--tx:#e6edf3;--dim:#8b98a9;--grn:#26d07c;--red:#f0616d;--amb:#f5b74e;--acc:#4f9dff}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  .wrap{max-width:1200px;margin:0 auto;padding:18px}
+  h1{font-size:18px;margin:0 0 2px}.sub{color:var(--dim);font-size:12px;margin:0 0 16px}
+  .badge{display:inline-block;padding:3px 10px;border-radius:999px;font-weight:700;font-size:12px}
+  .dry{background:#1d2a44;color:#8fb7ff}.demo{background:#173a2c;color:#6ce3a6}.live{background:#4a1418;color:#ff9aa2}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .kpi .l{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  .kpi .v{font-size:22px;font-weight:700;margin-top:3px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  .pos{color:var(--grn)}.neg{color:var(--red)}.dim{color:var(--dim)}
+  .pill{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700}
+  .p-cand{background:#173a2c;color:#6ce3a6}.p-block{background:#2a2230;color:#c6a9d6}.p-watch{background:#1f2733;color:#9fb2c9}
+  .long{color:var(--grn);font-weight:700}.short{color:var(--red);font-weight:700}
+  .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
+  .chartbox{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .chart-h{padding:8px 12px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line)}
+  .tvc{height:320px}
+  .empty{color:var(--dim);padding:8px 2px}
+  .flash{animation:fl .6s}@keyframes fl{from{background:#1c2740}to{background:transparent}}
+  .foot{color:var(--dim);font-size:11px;margin-top:20px;line-height:1.7}
+</style></head>
+<body><div class="wrap">
+  <h1>Crypto Signal Desk — Bot Monitor <span id="mode" class="badge dry">starting…</span></h1>
+  <p class="sub">Live view of the bot running on this machine. Updates every few seconds. <span id="clock"></span></p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="l">Simulated balance</div><div class="v" id="bal">—</div></div>
+    <div class="kpi"><div class="l">Realized</div><div class="v" id="cumr">—</div></div>
+    <div class="kpi"><div class="l">Win rate</div><div class="v" id="wr">—</div></div>
+    <div class="kpi"><div class="l">Closed trades</div><div class="v" id="nt">—</div></div>
+    <div class="kpi"><div class="l">Open now</div><div class="v" id="op">—</div></div>
+  </div>
+
+  <div class="card"><h2>Open positions</h2><div id="open"></div></div>
+
+  <div class="card"><h2>Live scan — what the bot is looking at right now</h2>
+    <div id="closest" class="empty"></div>
+    <div id="grid" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card"><h2>Charts the bot is analysing</h2><div id="charts" class="charts"></div></div>
+
+  <div class="card"><h2>Recent closed trades</h2><div id="recent"></div></div>
+
+  <div class="foot" id="cfgline"></div>
+  <div class="foot">This page is served by the bot on your own computer (localhost). It shows a simulation when in DRY-RUN.
+    No orders are placed and no API keys are ever shown here or sent anywhere.</div>
+</div>
+<script>
+var chartsBuilt=false;
+function fmtMoney(v){return v==null?'—':'$'+Number(v).toFixed(2);}
+function cls(v){return v>0?'pos':v<0?'neg':'dim';}
+function sign(v){return (v>0?'+':'')+Number(v).toFixed(2);}
+function tvSym(b){return 'BINANCE:'+b+'USDT';}
+function buildCharts(syms){
+  if(chartsBuilt||!window.TradingView||!syms.length)return;
+  var wrap=document.getElementById('charts');wrap.innerHTML='';
+  syms.forEach(function(b){
+    var id='tv_'+b;var d=document.createElement('div');d.className='chartbox';
+    d.innerHTML='<div class="chart-h">'+b+' · 1h</div><div id="'+id+'" class="tvc"></div>';
+    wrap.appendChild(d);
+    new TradingView.widget({container_id:id,symbol:tvSym(b),interval:'60',theme:'dark',style:'1',
+      locale:'en',autosize:true,hide_side_toolbar:true,allow_symbol_change:false,hide_top_toolbar:false});
+  });
+  chartsBuilt=true;
+}
+function render(data){
+  var s=data.status;
+  if(!s){return;}
+  var mb=document.getElementById('mode');
+  mb.textContent=s.mode;
+  mb.className='badge '+(s.mode.indexOf('DRY')>=0?'dry':s.mode.indexOf('DEMO')>=0?'demo':'live');
+  document.getElementById('bal').textContent=fmtMoney(s.balance);
+  var cr=document.getElementById('cumr');cr.textContent=sign(s.cum_r)+'R';cr.className='v '+cls(s.cum_r);
+  document.getElementById('wr').textContent=(s.closed?s.win_rate+'%':'—');
+  document.getElementById('nt').textContent=s.closed;
+  document.getElementById('op').textContent=s.open_count;
+  // open positions
+  var oh=document.getElementById('open');
+  if(!s.open||!s.open.length){oh.innerHTML='<div class="empty">No open positions — the bot is scanning for a setup that passes every gate.</div>';}
+  else{var r='<table><tr><th>Side</th><th>Market</th><th>TF</th><th>Entry</th><th>Now</th><th>Unrealized</th><th>Lev</th><th>Margin</th><th>Risk</th></tr>';
+    s.open.forEach(function(p){r+='<tr><td class="'+(p.dir=="LONG"?"long":"short")+'">'+p.dir+'</td><td>'+p.symbol+'</td><td>'+p.tf+'</td><td>'+Number(p.entry).toFixed(2)+'</td><td>'+(p.now==null?'—':Number(p.now).toFixed(2))+'</td><td class="'+cls(p.uR)+'">'+sign(p.uR)+'R</td><td>'+p.lev+'x</td><td>$'+p.invested+'</td><td>'+p.risk_frac+'%</td></tr>';});
+    oh.innerHTML=r+'</table>';}
+  // scan grid
+  var cl=document.getElementById('closest');
+  cl.textContent=data.closest?('Closest setup: '+data.closest):(s.open_count?'Fully deployed ('+s.open_count+' open) — not scanning for more right now.':'Scanning…');
+  var g=document.getElementById('grid');var a=data.analysis||[];
+  if(!a.length){g.innerHTML='<div class="empty">No charts scored yet this cycle.</div>';}
+  else{var t='<table><tr><th>Market</th><th>TF</th><th>Score</th><th>Bias</th><th>Regime</th><th>Confidence</th><th>Status</th></tr>';
+    a.forEach(function(x){var st=x.status=='candidate'?'p-cand':x.status=='blocked'?'p-block':'p-watch';
+      var lbl=x.status=='candidate'?'READY':x.status=='blocked'?'blocked':'watching';
+      t+='<tr><td>'+x.symbol+'</td><td>'+x.tf+'</td><td class="'+cls(x.score)+'">'+(x.score>0?'+':'')+x.score+'</td><td class="'+(x.dir=="LONG"?"long":"short")+'">'+x.dir+'</td><td class="dim">'+(x.regime||'—')+'</td><td>'+(x.conf==null?'—':x.conf+'%')+'</td><td><span class="pill '+st+'">'+lbl+'</span> <span class="dim">'+(x.reason||'')+'</span></td></tr>';});
+    g.innerHTML=t+'</table>';}
+  // recent trades
+  var rc=document.getElementById('recent');var j=s.recent||[];
+  if(!j.length){rc.innerHTML='<div class="empty">No closed trades yet.</div>';}
+  else{var rt='<table><tr><th>Market</th><th>TF</th><th>Side</th><th>Result</th><th>R</th></tr>';
+    j.forEach(function(e){rt+='<tr><td>'+(e.symbol||'').split('/')[0]+'</td><td>'+e.tf+'</td><td class="'+(e.dir>0?"long":"short")+'">'+(e.dir>0?'LONG':'SHORT')+'</td><td class="dim">'+e.result+'</td><td class="'+cls(e.r)+'">'+sign(e.r)+'R</td></tr>';});
+    rc.innerHTML=rt+'</table>';}
+  // config footer + charts
+  document.getElementById('cfgline').textContent='Trigger: '+s.trigger+' · confidence floor '+s.min_conf+'% · timeframes '+(s.timeframes||[]).join(', ')+' · risk '+s.risk_band[0]+'–'+s.risk_band[1]+'% (cap '+s.risk_band[2]+'%) · leverage '+Object.keys(s.lev_map||{}).map(function(k){return k+' '+s.lev_map[k]+'x';}).join(' / ');
+  var syms=[];(data.analysis||[]).forEach(function(x){if(syms.indexOf(x.symbol)<0)syms.push(x.symbol);});
+  if(!syms.length&&s.open)s.open.forEach(function(p){if(syms.indexOf(p.symbol)<0)syms.push(p.symbol);});
+  buildCharts(syms);
+}
+function poll(){
+  fetch('/api/state').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('clock').textContent='Last update '+new Date().toLocaleTimeString();
+    render(d);
+  }).catch(function(){document.getElementById('clock').textContent='(waiting for the bot…)';});
+}
+poll();setInterval(poll,5000);
+</script>
+</body></html>"""
+
+def _start_web_server():
+    if not CFG["WEB_ENABLED"]:
+        return
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass  # keep the console clean
+        def _send(self, code, body, ctype):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def do_GET(self):
+            if self.path.startswith("/api/state"):
+                payload = json.dumps({
+                    "status": LATEST.get("status"),
+                    "analysis": LATEST.get("analysis"),
+                    "closest": LATEST.get("closest"),
+                    "scan_ts": LATEST.get("scan_ts"),
+                    "now": time.time(),
+                }, default=str).encode("utf-8")
+                self._send(200, payload, "application/json")
+            else:
+                self._send(200, WATCH_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+    host, port = CFG["WEB_HOST"], CFG["WEB_PORT"]
+    try:
+        srv = ThreadingHTTPServer((host, port), H)
+    except OSError as e:
+        log.warning("web page couldn't start on %s:%d (%s) — bot still runs without it", host, port, e)
+        return
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    shown = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
+    log.info("*** WATCH THE BOT LIVE IN YOUR BROWSER:  http://%s:%d  ***", shown, port)
+
+# --------------------------------------------------------------------------
 # Main loop
 # --------------------------------------------------------------------------
 def run():
@@ -578,6 +748,7 @@ def run():
     if not CFG["DRY_RUN"] and not CFG["USE_DEMO"]:
         log.warning("!!! LIVE REAL-MONEY MODE — orders will be placed with real funds !!!")
         time.sleep(5)
+    _start_web_server()
     ex = Exchange()
     state = load_state()
 
@@ -609,7 +780,8 @@ def run():
         time.sleep(CFG["POLL_SECONDS"])
 
 def log_status(ex, state):
-    """Print a clear balance + positions summary every cycle (and to trader.log)."""
+    """Print a clear balance + positions summary every cycle (and to trader.log),
+    and publish the same picture to the local web page."""
     closed = [t for t in state["journal"] if t.get("r") is not None]
     open_ps = [p for p in state["positions"] if p["status"] == "open"]
     wins = [t for t in closed if t["r"] > 0]
@@ -625,18 +797,39 @@ def log_status(ex, state):
     log.info("Simulated balance: $%.2f  (from $100 base, %+.2fR realized)", bal, cum_r)
     log.info("Closed trades: %d, win rate %.0f%%, open positions: %d",
              len(closed), win_rate, len(open_ps))
+    open_view = []
     for p in open_ps:
+        cur = None
         try:
             cur = ex.candles(p["symbol"], p["tf"], 2)[-1]["c"]
             uR = p["dir"] * (cur - p["entry"]) / p["risk"] if p["risk"] else 0
             log.info("  OPEN %s %s %s | entry %.2f now %.2f | %+.2fR",
                      "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"], p["entry"], cur, uR)
         except Exception:
+            uR = 0
             log.info("  OPEN %s %s %s | entry %.2f",
                      "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"], p["entry"])
+        open_view.append({
+            "symbol": p["symbol"].split("/")[0], "tf": p["tf"],
+            "dir": "LONG" if p["dir"] > 0 else "SHORT", "entry": p["entry"], "now": cur,
+            "uR": round(uR, 2), "lev": round(p.get("lev", 1), 1),
+            "invested": round(p.get("invested", 0), 2),
+            "risk_frac": round(p.get("risk_frac", 0) * 100, 1), "conf": p.get("conf"),
+        })
     if not open_ps and not closed:
         log.info("  (no trades yet - scanning for a setup that passes all the gates)")
     log.info("===============================")
+    # publish snapshot for the web page (safe fields only — NEVER any API key)
+    LATEST["status"] = {
+        "mode": mode, "balance": round(bal, 2), "cum_r": round(cum_r, 2),
+        "closed": len(closed), "win_rate": round(win_rate), "open_count": len(open_ps),
+        "open": open_view,
+        "recent": list(reversed(state["journal"][-12:])),
+        "trigger": CFG["TRIGGER"], "min_conf": CFG["MIN_CONFIDENCE"],
+        "timeframes": [t.strip() for t in CFG["TIMEFRAMES"]],
+        "risk_band": [CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100],
+        "lev_map": CFG["MAX_LEVERAGE_MAP"], "ts": time.time(),
+    }
 
 def scan_and_trade(ex, state, equity):
     open_syms = {p["symbol"] for p in state["positions"] if p["status"] == "open"}
@@ -648,6 +841,7 @@ def scan_and_trade(ex, state, equity):
     need = strong_th if CFG["TRIGGER"] == "strong" else enter_th
     candidates = []
     near = []   # near-misses: (abs_score, "SYMBOL tf DIR — why it was blocked")
+    grid = []   # one row per chart scanned, for the live web view
     for symbol in ex.trade_symbols:
         if not symbol or symbol in open_syms:
             continue
@@ -672,24 +866,29 @@ def scan_and_trade(ex, state, equity):
             base = symbol.split("/")[0]
             d = 1 if an["score"] > 0 else -1
             dirtxt = "LONG" if d > 0 else "SHORT"
-            def miss(reason):
+            row = {"symbol": base, "tf": tf, "score": an["score"], "dir": dirtxt,
+                   "regime": None, "conf": None, "status": "watching", "reason": ""}
+            grid.append(row)
+            def blocked(reason):
+                row["status"] = "blocked"; row["reason"] = reason
                 near.append((abs(an["score"]), "%s %s %s — %s" % (base, tf, dirtxt, reason)))
             if abs(an["score"]) < need:
-                miss("score %+d, needs %s%d to trigger" % (an["score"], "±", int(need)))
+                blocked("score %+d, needs %s%d to trigger" % (an["score"], "±", int(need)))
                 continue
             li = len(an["e20"]) - 1
             trend_strength = (abs(an["e20"][li] - an["e50"][li]) / an["atr"]
                               if (an["e20"][li] is not None and an["e50"][li] is not None and an["atr"] > 0) else 0)
             regime = "trend" if trend_strength >= 1 else "mixed" if trend_strength >= 0.5 else "chop"
+            row["regime"] = regime
             if regime == "chop" and abs(an["score"]) < strong_th:
-                miss("chop regime, score %+d below STRONG" % an["score"]); continue
+                blocked("chop regime, score %+d below STRONG" % an["score"]); continue
             closes = [c["c"] for c in candles]
             if signal_stability(closes, an["e20"]) >= 3:      # whipsaw gate
-                miss("whipsaw (signal keeps flipping)"); continue
+                blocked("whipsaw (signal keeps flipping)"); continue
             bt = backtest(candles)
             if bt["n"] >= 6 and (bt["avg_r"] <= 0 or bt["profit_factor"] < 1.2):
-                miss("backtest edge too weak (PF %.2f, %+0.2fR over %d trades)"
-                     % (bt["profit_factor"], bt["avg_r"], bt["n"])); continue
+                blocked("backtest edge too weak (PF %.2f, %+0.2fR over %d trades)"
+                        % (bt["profit_factor"], bt["avg_r"], bt["n"])); continue
             # timeframe alignment: how many OTHER timeframes of this symbol agree
             agree = sum(1 for otf, oo in tfs.items()
                         if otf != tf and abs(oo["an"]["score"]) >= enter_th
@@ -697,13 +896,20 @@ def scan_and_trade(ex, state, equity):
             tv = tv_rating(candles)
             tv_pts = clamp(tv["score"] * d * 12, -12, 12)
             conf = confidence(an, bt, trend_strength, agree, tv_pts)
+            row["conf"] = conf
             if conf < CFG["MIN_CONFIDENCE"]:
-                miss("confidence %d%%, needs %d%%" % (conf, int(CFG["MIN_CONFIDENCE"]))); continue
+                blocked("confidence %d%%, needs %d%%" % (conf, int(CFG["MIN_CONFIDENCE"]))); continue
             if in_cooldown(state["journal"], symbol, TF_MIN.get(tf, 60)):
-                miss("cooldown after a recent trade"); continue
+                blocked("cooldown after a recent trade"); continue
+            row["status"] = "candidate"
             candidates.append({"symbol": symbol, "tf": tf, "dir": d, "score": an["score"],
                                "conf": conf, "an": an, "regime": regime, "agree": agree,
                                "tv": tv["score"]})
+    # publish what the scan saw for the live web page
+    grid.sort(key=lambda r: (r["conf"] if r["conf"] is not None else -1, abs(r["score"])), reverse=True)
+    LATEST["analysis"] = grid
+    LATEST["scan_ts"] = time.time()
+    LATEST["closest"] = (sorted(near, reverse=True)[0][1] if near else None)
     if not candidates:
         if near:
             near.sort(reverse=True)

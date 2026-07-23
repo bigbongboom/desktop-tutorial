@@ -126,6 +126,8 @@ CFG = {
 # Live snapshot the local web page reads (never persisted, never leaves the laptop).
 LATEST = {"status": None, "analysis": [], "closest": None, "scan_ts": None}
 LOG_LINES = deque(maxlen=300)   # rolling activity feed shown on the web page
+# Manual controls from the web page (buttons write here; the main loop obeys them).
+CONTROL = {"paused": False, "close": set(), "close_all": False}
 
 # Make the console tolerate any character on Windows (cp1252 can't draw some).
 try:
@@ -690,12 +692,26 @@ WATCH_PAGE = """<!doctype html>
   .chip{background:#141b26;border:1px solid var(--line);border-radius:6px;padding:3px 9px;font-size:12px;color:var(--dim)}
   .chip b{color:var(--tx)}
   .lv{font-size:12px;color:var(--dim);margin-top:5px}.lv b{color:var(--tx)}
+  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
+  .btn{background:#1b2432;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+  .btn:hover{background:#232f40}
+  .btn.warn{background:#3a2f16;border-color:#5a4a1e;color:#f5cf7e}
+  .btn.danger{background:#3a1820;border-color:#5a2530;color:#ff9aa2}
+  .btn.mini{padding:4px 10px;font-size:12px}
+  .pausebar{background:#3a2f16;border:1px solid #5a4a1e;color:#f5cf7e;border-radius:8px;padding:8px 12px;font-weight:600;font-size:13px;display:none;margin:10px 0}
   .flash{animation:fl .6s}@keyframes fl{from{background:#1c2740}to{background:transparent}}
   .foot{color:var(--dim);font-size:11px;margin-top:20px;line-height:1.7}
 </style></head>
 <body><div class="wrap">
   <h1>Crypto Signal Desk — Bot Monitor <span id="mode" class="badge dry">starting…</span></h1>
   <p class="sub"><span id="live">○ connecting…</span> · Live view of the bot running on this machine. <span id="clock"></span></p>
+
+  <div class="controls">
+    <button id="pauseBtn" class="btn warn" onclick="togglePause()">⏸ Pause new trades</button>
+    <button class="btn danger" onclick="closeAll()">✕ Close ALL positions</button>
+    <span class="dim" style="font-size:12px">Manual control — acts within a couple of seconds. (To stop the bot entirely, close its terminal window / Ctrl+C.)</span>
+  </div>
+  <div id="pausebar" class="pausebar">⏸ PAUSED — the bot is not opening new trades. It still manages and lets you close open ones.</div>
 
   <div class="kpis">
     <div class="kpi"><div class="l">Simulated balance</div><div class="v" id="bal">—</div></div>
@@ -782,6 +798,9 @@ function render(data){
   var mb=document.getElementById('mode');
   mb.textContent=s.mode;
   mb.className='badge '+(s.mode.indexOf('DRY')>=0?'dry':s.mode.indexOf('DEMO')>=0?'demo':'live');
+  window._paused=!!s.paused;
+  document.getElementById('pausebar').style.display=s.paused?'block':'none';
+  document.getElementById('pauseBtn').textContent=s.paused?'▶ Resume trading':'⏸ Pause new trades';
   document.getElementById('bal').textContent=fmtMoney(s.balance);
   var cr=document.getElementById('cumr');cr.textContent=sign(s.cum_r)+'R';cr.className='v '+cls(s.cum_r);
   document.getElementById('wr').textContent=(s.closed?s.win_rate+'%':'—');
@@ -790,8 +809,15 @@ function render(data){
   // open positions
   var oh=document.getElementById('open');
   if(!s.open||!s.open.length){oh.innerHTML='<div class="empty">No open positions — the bot is scanning for a setup that passes every gate.</div>';}
-  else{var r='<table><tr><th>Side</th><th>Market</th><th>TF</th><th>Entry</th><th>Now</th><th>Unrealized</th><th>Lev</th><th>Margin</th><th>Risk</th></tr>';
-    s.open.forEach(function(p){r+='<tr><td class="'+(p.dir=="LONG"?"long":"short")+'">'+p.dir+'</td><td>'+p.symbol+'</td><td>'+p.tf+'</td><td>'+Number(p.entry).toFixed(2)+'</td><td>'+(p.now==null?'—':Number(p.now).toFixed(2))+'</td><td class="'+cls(p.uR)+'">'+sign(p.uR)+'R</td><td>'+p.lev+'x</td><td>$'+p.invested+'</td><td>'+p.risk_frac+'%</td></tr>';});
+  else{var r='<table><tr><th>Side</th><th>Market</th><th>TF</th><th>Invested</th><th>Lev</th><th>Entry</th><th>Now</th><th>P&amp;L %</th><th>P&amp;L $</th><th>R</th><th></th></tr>';
+    s.open.forEach(function(p){
+      r+='<tr><td class="'+(p.dir=="LONG"?"long":"short")+'">'+p.dir+'</td><td>'+p.symbol+'</td><td>'+p.tf+'</td>'
+        +'<td><b>$'+p.invested+'</b></td><td>'+p.lev+'x</td>'
+        +'<td>'+Number(p.entry).toFixed(2)+'</td><td>'+(p.now==null?'—':Number(p.now).toFixed(2))+'</td>'
+        +'<td class="'+cls(p.pnl_pct)+'"><b>'+(p.pnl_pct>0?'+':'')+p.pnl_pct+'%</b></td>'
+        +'<td class="'+cls(p.pnl_usd)+'">'+(p.pnl_usd>0?'+':'')+'$'+Math.abs(p.pnl_usd).toFixed(2)+'</td>'
+        +'<td class="'+cls(p.uR)+'">'+sign(p.uR)+'R</td>'
+        +'<td><button class="btn mini danger" onclick="closePos(\\''+p.id+'\\')">Close</button></td></tr>';});
     oh.innerHTML=r+'</table>';}
   // scan grid
   var cl=document.getElementById('closest');
@@ -817,6 +843,10 @@ function render(data){
   if(!syms.length&&s.open)s.open.forEach(function(p){if(syms.indexOf(p.symbol)<0)syms.push(p.symbol);});
   buildCharts(syms);
 }
+function hit(url){return fetch(url).then(function(){setTimeout(poll,300);});}
+function togglePause(){hit(window._paused?'/api/resume':'/api/pause');}
+function closePos(id){if(confirm('Close this position now at market?'))hit('/api/close?id='+encodeURIComponent(id));}
+function closeAll(){if(confirm('Close ALL open positions now at market?'))hit('/api/closeall');}
 function poll(){
   fetch('/api/state').then(function(r){return r.json();}).then(function(d){
     document.getElementById('clock').textContent='Last update '+new Date().toLocaleTimeString();
@@ -845,8 +875,24 @@ def _start_web_server():
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        def _ok(self):
+            self._send(200, b'{"ok":true}', "application/json")
         def do_GET(self):
-            if self.path.startswith("/api/state"):
+            p = self.path
+            # ---- manual controls (localhost only) ----
+            if p.startswith("/api/pause"):
+                CONTROL["paused"] = True; log.info("PAUSE requested from the monitor."); return self._ok()
+            if p.startswith("/api/resume"):
+                CONTROL["paused"] = False; log.info("RESUME requested from the monitor."); return self._ok()
+            if p.startswith("/api/closeall"):
+                CONTROL["close_all"] = True; log.info("CLOSE-ALL requested from the monitor."); return self._ok()
+            if p.startswith("/api/close"):
+                from urllib.parse import urlparse, parse_qs
+                pid = (parse_qs(urlparse(p).query).get("id") or [""])[0]
+                if pid:
+                    CONTROL["close"].add(pid); log.info("Close requested for position %s", pid)
+                return self._ok()
+            if p.startswith("/api/state"):
                 payload = json.dumps({
                     "status": LATEST.get("status"),
                     "analysis": LATEST.get("analysis"),
@@ -893,7 +939,7 @@ def run():
         "risk_band": [CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100],
         "lev_map": CFG["MAX_LEVERAGE_MAP"],
         "costs": {"fee": CFG["FEE_RATE"] * 100, "slip": CFG["SLIPPAGE"] * 100, "funding": CFG["FUNDING_DAILY"] * 100},
-        "ts": time.time(),
+        "paused": CONTROL["paused"], "ts": time.time(),
     }
     log.info("Connecting to the exchange and loading markets…")
     ex = Exchange()
@@ -919,15 +965,23 @@ def run():
             # 1) manage existing positions
             manage_positions(ex, state)
 
-            # 2) scan for new entries
-            if trading_allowed:
+            # 2) scan for new entries (unless the user paused new trades)
+            if trading_allowed and not CONTROL["paused"]:
                 scan_and_trade(ex, state, equity)
+            elif CONTROL["paused"]:
+                log.info("PAUSED by user — managing open positions only, no new trades.")
 
             save_state(state)
             log_status(ex, state)
         except Exception as e:
             log.exception("loop error: %s", e)
-        time.sleep(CFG["POLL_SECONDS"])
+        # interruptible wait so manual Close / Close-all act within ~2s, not a full cycle
+        waited = 0
+        while waited < CFG["POLL_SECONDS"]:
+            if CONTROL["close"] or CONTROL["close_all"]:
+                break
+            step = min(2, CFG["POLL_SECONDS"] - waited)
+            time.sleep(step); waited += step
 
 def log_status(ex, state):
     """Print a clear balance + positions summary every cycle (and to trader.log),
@@ -949,21 +1003,26 @@ def log_status(ex, state):
              len(closed), win_rate, len(open_ps))
     open_view = []
     for p in open_ps:
-        cur = None
+        cur = None; move = 0
+        lev = p.get("lev", 1); inv = p.get("invested", 0)
         try:
             cur = ex.candles(p["symbol"], p["tf"], 2)[-1]["c"]
             uR = p["dir"] * (cur - p["entry"]) / p["risk"] if p["risk"] else 0
-            log.info("  OPEN %s %s %s | entry %.2f now %.2f | %+.2fR",
-                     "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"], p["entry"], cur, uR)
+            move = p["dir"] * (cur - p["entry"]) / p["entry"] if p["entry"] else 0
+            pnl_pct = move * lev * 100          # % return on the margin (leveraged)
+            pnl_usd = move * inv * lev          # $ gain/loss on this position
+            log.info("  OPEN %s %s %s | entry %.2f now %.2f | %+.2fR | %+.1f%% (%+.2f$)",
+                     "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"],
+                     p["entry"], cur, uR, pnl_pct, pnl_usd)
         except Exception:
-            uR = 0
+            uR = 0; pnl_pct = 0; pnl_usd = 0
             log.info("  OPEN %s %s %s | entry %.2f",
                      "LONG" if p["dir"] > 0 else "SHORT", p["symbol"], p["tf"], p["entry"])
         open_view.append({
-            "symbol": p["symbol"].split("/")[0], "tf": p["tf"],
+            "id": p.get("id"), "symbol": p["symbol"].split("/")[0], "tf": p["tf"],
             "dir": "LONG" if p["dir"] > 0 else "SHORT", "entry": p["entry"], "now": cur,
-            "uR": round(uR, 2), "lev": round(p.get("lev", 1), 1),
-            "invested": round(p.get("invested", 0), 2),
+            "uR": round(uR, 2), "lev": round(lev, 1), "invested": round(inv, 2),
+            "pnl_pct": round(pnl_pct, 1), "pnl_usd": round(pnl_usd, 2),
             "risk_frac": round(p.get("risk_frac", 0) * 100, 1), "conf": p.get("conf"),
         })
     if not open_ps and not closed:
@@ -980,7 +1039,7 @@ def log_status(ex, state):
         "risk_band": [CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100],
         "lev_map": CFG["MAX_LEVERAGE_MAP"],
         "costs": {"fee": CFG["FEE_RATE"] * 100, "slip": CFG["SLIPPAGE"] * 100, "funding": CFG["FUNDING_DAILY"] * 100},
-        "ts": time.time(),
+        "paused": CONTROL["paused"], "ts": time.time(),
     }
 
 def scan_and_trade(ex, state, equity):
@@ -1147,6 +1206,7 @@ def open_trade(ex, state, d, equity, invested):
         log.error("order failed: %s", e)
         return
     state["positions"].append({
+        "id": "%s|%s|%d" % (d["symbol"], d["tf"], int(time.time())),
         "symbol": d["symbol"], "tf": d["tf"], "dir": d["dir"], "entry": price,
         "stop": stop, "tgt": tgt, "qty": qty, "lev": lev, "invested": invest,
         "risk": stop_d, "risk_frac": risk_pct_used, "conf": d["conf"],
@@ -1160,6 +1220,19 @@ def manage_positions(ex, state):
         try:
             candles = ex.candles(p["symbol"], p["tf"], 300)
         except Exception:
+            candles = None
+        # MANUAL CLOSE from the web page (per-position button or "close all")
+        if CONTROL["close_all"] or p.get("id") in CONTROL["close"]:
+            try:
+                cur = candles[-1]["c"] if candles else ex.candles(p["symbol"], p["tf"], 2)[-1]["c"]
+            except Exception:
+                cur = p["entry"]
+            uR = p["dir"] * (cur - p["entry"]) / p["risk"] if p["risk"] else 0
+            log.info("MANUAL CLOSE requested from the monitor — closing %s %s", p["symbol"], p["tf"])
+            close_trade(ex, state, p, cur, "manual", uR)
+            CONTROL["close"].discard(p.get("id"))
+            continue
+        if candles is None:
             continue
         an = analyze(candles)
         cur = an["price"]; atr_now = an["atr"]
@@ -1189,6 +1262,7 @@ def manage_positions(ex, state):
                 p["stop"] = trail
         if exit_now:
             close_trade(ex, state, p, cur, exit_now, uR)
+    CONTROL["close_all"] = False   # one-shot: handled this pass
 
 def close_trade(ex, state, p, price, result, uR):
     side = "sell" if p["dir"] > 0 else "buy"

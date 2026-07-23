@@ -339,6 +339,7 @@ def analyze(candles):
     bears = sum(1 for p in pts if p < -1)
     return {"price": price, "score": score, "atr": atr_now, "atr_pct": atr_pct,
             "e20": e20, "e50": e50, "e200": e200, "rsi": r, "bbu": bbu, "bbl": bbl,
+            "macd_line": line, "macd_signal": signal, "stoch": stk,
             "bulls": bulls, "bears": bears}
 
 def regime_of(an):
@@ -439,6 +440,45 @@ def tv_rating(candles):
         wr = ((hh - price) / (hh - ll)) * -100 if hh > ll else -50
         vote(wr < -80, wr > -20)
     return {"score": (buy - sell) / total if total else 0, "buy": buy, "sell": sell, "total": total}
+
+def chart_readout(an, candles):
+    """Turn the indicators into a plain-language read of the chart + the key price
+    levels (support/resistance/trend) — what a trader would draw and note."""
+    i = len(candles) - 1
+    price = an["price"]
+    read = []
+    def row(k, v, b):
+        read.append({"k": k, "v": v, "b": b})
+    e20, e50, e200 = an["e20"][i], an["e50"][i], an["e200"][i]
+    if e200 is not None:
+        row("Primary trend (EMA200)", ("UP — price above" if price >= e200 else "DOWN — price below")
+            + " %.2f" % e200, "bull" if price >= e200 else "bear")
+    if e20 is not None and e50 is not None:
+        row("Short vs mid trend", ("EMA20 above EMA50 (bullish)" if e20 >= e50 else "EMA20 below EMA50 (bearish)"),
+            "bull" if e20 >= e50 else "bear")
+    r = an["rsi"][i]
+    if r is not None:
+        zone = "overbought" if r > 70 else "oversold" if r < 30 else "neutral"
+        row("Momentum (RSI 14)", "%.0f — %s" % (r, zone), "bull" if r >= 50 else "bear")
+    ml, ms = an["macd_line"][i], an["macd_signal"][i]
+    if ml is not None and ms is not None:
+        row("MACD", "bullish (line above signal)" if ml >= ms else "bearish (line below signal)",
+            "bull" if ml >= ms else "bear")
+    st = an["stoch"][i]
+    if st is not None:
+        row("Stochastic", "%.0f — %s" % (st, "high" if st > 80 else "low" if st < 20 else "mid"),
+            "bull" if st >= 50 else "bear")
+    bbu, bbl = an["bbu"][i], an["bbl"][i]
+    if bbu is not None and bbu != bbl:
+        pb = (price - bbl) / (bbu - bbl) * 100
+        row("Bollinger position", "%.0f%% of the band" % pb, "bull" if pb >= 50 else "bear")
+    row("Volatility (ATR)", "%.2f%% of price" % an["atr_pct"], "neutral")
+    # support / resistance the bot is watching (recent swing high & low)
+    win = candles[-40:] if len(candles) >= 40 else candles
+    resistance = max(c["h"] for c in win)
+    support = min(c["l"] for c in win)
+    return read, {"support": support, "resistance": resistance,
+                  "e20": e20, "e50": e50, "e200": e200, "price": price}
 
 def confidence(an, bt, trend_strength, agree, tv_pts):
     """Measured confidence — mirrors the dashboard's conviction formula EXACTLY so the
@@ -616,6 +656,16 @@ WATCH_PAGE = """<!doctype html>
   .logfeed{background:#080b11;border:1px solid var(--line);border-radius:8px;padding:10px 12px;height:260px;overflow:auto;margin:0;
     font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#aebccd;white-space:pre-wrap;word-break:break-word}
   #live{font-weight:700}
+  .xr{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#0f141c}
+  .xr-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px}
+  .xr-h .t{font-weight:700;font-size:14px}
+  .rd{display:grid;grid-template-columns:1fr 1fr;gap:0 22px;font-size:12.5px;margin:6px 0}
+  .rd .r{display:flex;justify-content:space-between;border-bottom:1px solid #1a212c;padding:4px 0}
+  .rd .r .kk{color:var(--dim)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0 4px}
+  .chip{background:#141b26;border:1px solid var(--line);border-radius:6px;padding:3px 9px;font-size:12px;color:var(--dim)}
+  .chip b{color:var(--tx)}
+  .lv{font-size:12px;color:var(--dim);margin-top:5px}.lv b{color:var(--tx)}
   .flash{animation:fl .6s}@keyframes fl{from{background:#1c2740}to{background:transparent}}
   .foot{color:var(--dim);font-size:11px;margin-top:20px;line-height:1.7}
 </style></head>
@@ -640,6 +690,8 @@ WATCH_PAGE = """<!doctype html>
     <div id="grid" style="margin-top:8px"></div>
   </div>
 
+  <div class="card"><h2>How the bot is reading the charts (its analysis)</h2><div id="xray"></div></div>
+
   <div class="card"><h2>Charts the bot is analysing</h2><div id="charts" class="charts"></div></div>
 
   <div class="card"><h2>Recent closed trades</h2><div id="recent"></div></div>
@@ -655,6 +707,32 @@ function renderLog(lines){var lf=document.getElementById('logfeed');if(!lines||!
   var atBottom=lf.scrollHeight-lf.scrollTop-lf.clientHeight<40;
   lf.textContent=lines.join('\\n');
   if(atBottom)lf.scrollTop=lf.scrollHeight;}
+function chip(k,v,c){return '<span class="chip">'+k+' <b'+(c?' class="'+c+'"':'')+'>'+v+'</b></span>';}
+function renderXray(rows){
+  var xr=document.getElementById('xray');
+  var top=(rows||[]).filter(function(x){return x.read&&x.read.length;}).slice(0,4);
+  if(!top.length){xr.innerHTML='<div class="empty">Waiting for the first full scan (under a minute)…</div>';return;}
+  xr.innerHTML=top.map(function(x){
+    var head='<div class="xr-h"><div class="t">'+x.symbol+' · '+x.tf+' · <span class="'+(x.dir=="LONG"?"long":"short")+'">'+x.dir+'</span></div>'
+      +'<div class="dim">score <b class="'+cls(x.score)+'">'+(x.score>0?'+':'')+x.score+'</b> &nbsp; confidence <b style="color:var(--tx)">'+(x.conf==null?'—':x.conf+'%')+'</b></div></div>';
+    var rd='<div class="rd">'+x.read.map(function(rr){var c=rr.b=='bull'?'pos':rr.b=='bear'?'neg':'dim';
+      return '<div class="r"><span class="kk">'+rr.k+'</span><span class="'+c+'">'+rr.v+'</span></div>';}).join('')+'</div>';
+    var parts='';
+    if(x.conf_parts){var p=x.conf_parts;
+      parts='<div class="chips">'+chip('base',p.base)+chip('signal','+'+p.signal)
+        +chip('backtest',(p.backtest>0?'+':'')+p.backtest,cls(p.backtest))
+        +chip('alignment','+'+p.alignment)+chip('trend','+'+p.regime)
+        +chip('TV',(p.tv>0?'+':'')+p.tv,cls(p.tv))+chip('= confidence',x.conf+'%')+'</div>';}
+    var bt='';
+    if(x.backtest){var b=x.backtest;bt='<div class="lv">Backtest on this chart: <b>'+b.n+'</b> trades · <b>'+b.win_rate+'%</b> win · profit factor <b class="'+(b.pf>=1.2?'pos':'neg')+'">'+b.pf+'</b> · <b class="'+cls(b.avg_r)+'">'+(b.avg_r>0?'+':'')+b.avg_r+'R</b> avg</div>';}
+    var tr='';
+    if(x.trade){var t=x.trade;tr='<div class="lv">Planned trade: entry <b>'+t.entry+'</b> · stop <b>'+t.stop+'</b> · target <b>'+t.target+'</b> · reward:risk <b>'+t.rr+':1</b></div>';}
+    var lv='';
+    if(x.levels){lv='<div class="lv">Levels it\\'s watching: support <b>'+Number(x.levels.support).toFixed(2)+'</b> · resistance <b>'+Number(x.levels.resistance).toFixed(2)+'</b></div>';}
+    var why='<div class="lv">Verdict: '+(x.status=='candidate'?'<b class="pos">READY to trade</b>':x.status=='blocked'?'<b class="neg">standing aside</b> — '+(x.reason||''):'watching')+'</div>';
+    return '<div class="xr">'+head+rd+parts+bt+tr+lv+why+'</div>';
+  }).join('');
+}
 function fmtMoney(v){return v==null?'—':'$'+Number(v).toFixed(2);}
 function cls(v){return v>0?'pos':v<0?'neg':'dim';}
 function sign(v){return (v>0?'+':'')+Number(v).toFixed(2);}
@@ -691,6 +769,7 @@ function render(data){
   // scan grid
   var cl=document.getElementById('closest');
   cl.textContent=data.closest?('Closest setup: '+data.closest):(s.open_count?'Fully deployed ('+s.open_count+' open) — not scanning for more right now.':'Scanning…');
+  renderXray(data.analysis);
   var g=document.getElementById('grid');var a=data.analysis||[];
   if(!a.length){g.innerHTML='<div class="empty">No charts scored yet this cycle.</div>';}
   else{var t='<table><tr><th>Market</th><th>TF</th><th>Score</th><th>Bias</th><th>Regime</th><th>Confidence</th><th>Status</th></tr>';
@@ -909,6 +988,9 @@ def scan_and_trade(ex, state, equity):
             dirtxt = "LONG" if d > 0 else "SHORT"
             row = {"symbol": base, "tf": tf, "score": an["score"], "dir": dirtxt,
                    "regime": None, "conf": None, "status": "watching", "reason": ""}
+            read, levels = chart_readout(an, candles)
+            row["read"] = read
+            row["levels"] = {k: (round(v, 2) if isinstance(v, (int, float)) else v) for k, v in levels.items()}
             grid.append(row)
             def blocked(reason):
                 row["status"] = "blocked"; row["reason"] = reason
@@ -927,6 +1009,8 @@ def scan_and_trade(ex, state, equity):
             if signal_stability(closes, an["e20"]) >= 3:      # whipsaw gate
                 blocked("whipsaw (signal keeps flipping)"); continue
             bt = backtest(candles)
+            row["backtest"] = {"n": bt["n"], "win_rate": round(bt["win_rate"]),
+                               "pf": round(bt["profit_factor"], 2), "avg_r": round(bt["avg_r"], 2)}
             if bt["n"] >= 6 and (bt["avg_r"] <= 0 or bt["profit_factor"] < 1.2):
                 blocked("backtest edge too weak (PF %.2f, %+0.2fR over %d trades)"
                         % (bt["profit_factor"], bt["avg_r"], bt["n"])); continue
@@ -938,6 +1022,19 @@ def scan_and_trade(ex, state, equity):
             tv_pts = clamp(tv["score"] * d * 12, -12, 12)
             conf = confidence(an, bt, trend_strength, agree, tv_pts)
             row["conf"] = conf
+            # the confidence math, broken out, plus the trade it would place
+            hist_pts = 0
+            if bt["n"]:
+                shrink = bt["n"] / (bt["n"] + 10)
+                hist_pts = clamp(clamp(bt["avg_r"], -1, 1) * shrink * 30, -15, 15)
+            row["conf_parts"] = {"base": 25, "signal": round(min(abs(an["score"]), 70) * 0.35, 1),
+                                 "backtest": round(hist_pts, 1), "alignment": min(agree, 3) * 5,
+                                 "regime": round(clamp(trend_strength, 0, 1.5) * 8, 1), "tv": round(tv_pts, 1)}
+            row["agree"] = agree
+            stop = an["price"] - d * CFG["STOP_ATR"] * an["atr"]
+            tgt = an["price"] + d * CFG["TARGET_ATR"] * an["atr"]
+            row["trade"] = {"entry": round(an["price"], 2), "stop": round(stop, 2),
+                            "target": round(tgt, 2), "rr": round(CFG["TARGET_ATR"] / CFG["STOP_ATR"], 2)}
             if conf < CFG["MIN_CONFIDENCE"]:
                 blocked("confidence %d%%, needs %d%%" % (conf, int(CFG["MIN_CONFIDENCE"]))); continue
             if in_cooldown(state["journal"], symbol, TF_MIN.get(tf, 60)):

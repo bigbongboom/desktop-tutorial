@@ -145,6 +145,25 @@ By default the bot sizes **exactly like the dashboard's AI account** — not a f
   drawdown and only exits on a strong reversal — higher variance, can lose more per trade.
 - `DAILY_LOSS_LIMIT` — daily drawdown kill-switch.
 
+## How the profitability check works (and why to trust it more now)
+
+Before any trade, the bot **replays its own strategy over that chart's history** and
+only trades where it had a real edge. That replay now:
+
+- **Subtracts real trading costs** — taker fees (`FEE_RATE`), slippage (`SLIPPAGE`)
+  and funding (`FUNDING_DAILY`) — so a setup that only "wins" before costs is
+  correctly rejected. The monitor shows both the gross and net result and how much
+  the costs took.
+- **Validates out-of-sample** — it splits history and checks the edge still holds on
+  the most recent third it hasn't "traded". If a setup only worked on old data, the
+  bot skips it (`edge fails out-of-sample`). This is the main guard against
+  curve-fitting — the #1 way backtests lie.
+
+You'll see both numbers per chart in the **"How the bot is reading the charts"**
+panel. A setup needs a positive, cost-adjusted edge that *also* holds out-of-sample
+to trade. This makes it a bit pickier — that's the point: it's the honest path to not
+bleeding money to fees on setups that never really worked.
+
 ## Honest limitations
 
 - The strategy has **not** been proven profitable yet. The demo is where you find out.

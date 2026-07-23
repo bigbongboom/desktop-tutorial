@@ -112,6 +112,10 @@ CFG = {
     "MIN_NOTIONAL":    _num("MIN_NOTIONAL", 10),
     "STOP_ATR":        _num("STOP_ATR", 1.5),
     "TARGET_ATR":      _num("TARGET_ATR", 2.5),
+    # Real-world trading costs the backtest must subtract (so its edge isn't fake).
+    "FEE_RATE":        _num("FEE_RATE", 0.0005),   # taker fee per side (Kraken Futures ~0.05%)
+    "SLIPPAGE":        _num("SLIPPAGE", 0.0002),   # assumed slippage per side (~0.02%)
+    "FUNDING_DAILY":   _num("FUNDING_DAILY", 0.0003),  # avg funding paid per day held (~0.03%/day)
     "DAILY_LOSS_LIMIT":_num("DAILY_LOSS_LIMIT", 0.10),  # kill-switch
     "STATE_FILE":      os.getenv("STATE_FILE", "bot_state.json"),
     "WEB_ENABLED":     _bool("WEB_ENABLED", True),      # serve the local watch page
@@ -361,23 +365,41 @@ def signal_stability(closes, e20):
             crossings += 1
     return crossings
 
-def backtest(candles):
-    """Replay the composite strategy over history for the pre-trade edge gate."""
+def _bt_stats(rlist):
+    n = len(rlist)
+    wins = [r for r in rlist if r > 0]
+    losses = [r for r in rlist if r <= 0]
+    gw = sum(wins); gl = abs(sum(losses))
+    return {"n": n, "win_rate": (len(wins) / n * 100) if n else 0,
+            "avg_r": ((gw - gl) / n) if n else 0,
+            "profit_factor": (gw / gl) if gl > 0 else (999 if gw > 0 else 0)}
+
+def backtest(candles, tf_minutes=60):
+    """Replay the composite strategy over history — NET of real trading costs (fees,
+    slippage, funding) — and split it into an in-sample and an out-of-sample (most
+    recent third) window so we can see whether the edge still holds on unseen data."""
     warm = 210
-    trades = []
+    fills = []        # (open_index, gross_R, net_R)
     pos = None
+    roundtrip = 2 * CFG["FEE_RATE"] + 2 * CFG["SLIPPAGE"]   # cost fraction, entry+exit
+    fund_hr = CFG["FUNDING_DAILY"] / 24.0
     for i in range(warm, len(candles) - 1):
         if pos:
             c = candles[i]
-            exit_px = None; res = None
+            exit_px = None
             if (c["l"] <= pos["stop"]) if pos["dir"] > 0 else (c["h"] >= pos["stop"]):
-                exit_px, res = pos["stop"], "sl"
+                exit_px = pos["stop"]
             elif (c["h"] >= pos["tgt"]) if pos["dir"] > 0 else (c["l"] <= pos["tgt"]):
-                exit_px, res = pos["tgt"], "tp"
+                exit_px = pos["tgt"]
             elif i - pos["open_i"] >= pos["max_bars"]:
-                exit_px, res = c["c"], "time"
+                exit_px = c["c"]
             if exit_px is not None:
-                trades.append(pos["dir"] * (exit_px - pos["entry"]) / pos["risk"])
+                gross_R = pos["dir"] * (exit_px - pos["entry"]) / pos["risk"]
+                stop_pct = pos["risk"] / pos["entry"]
+                hours = (i - pos["open_i"]) * tf_minutes / 60.0
+                # costs are a % of notional; convert to R by dividing by the stop %
+                cost_R = ((roundtrip + fund_hr * hours) / stop_pct) if stop_pct > 0 else 0
+                fills.append((pos["open_i"], gross_R, gross_R - cost_R))
                 pos = None
             continue
         sub = candles[: i + 1]
@@ -392,13 +414,15 @@ def backtest(candles):
         tgt_d = CFG["TARGET_ATR"] * atr_now
         pos = {"dir": d, "entry": entry, "stop": entry - d * stop_d, "tgt": entry + d * tgt_d,
                "risk": stop_d, "open_i": i + 1, "max_bars": math.ceil(tgt_d / (0.65 * atr_now) * 1.7)}
-    n = len(trades)
-    wins = [t for t in trades if t > 0]
-    losses = [t for t in trades if t <= 0]
-    gw = sum(wins); gl = abs(sum(losses))
-    return {"n": n, "win_rate": (len(wins) / n * 100) if n else 0,
-            "avg_r": ((gw - gl) / n) if n else 0,
-            "profit_factor": (gw / gl) if gl > 0 else (999 if gw > 0 else 0)}
+    net = [f[2] for f in fills]
+    gross = [f[1] for f in fills]
+    stats = _bt_stats(net)
+    stats["gross_avg_r"] = (sum(gross) / len(gross)) if gross else 0
+    # out-of-sample = trades opened in the most recent third of the tested window
+    lo, hi = warm, len(candles) - 1
+    cut = lo + int((hi - lo) * 0.67)
+    stats["oos"] = _bt_stats([f[2] for f in fills if f[0] >= cut])
+    return stats
 
 def tv_rating(candles):
     """TradingView-style consensus (12 MAs + 6 oscillators) — a faithful port of the
@@ -724,7 +748,10 @@ function renderXray(rows){
         +chip('alignment','+'+p.alignment)+chip('trend','+'+p.regime)
         +chip('TV',(p.tv>0?'+':'')+p.tv,cls(p.tv))+chip('= confidence',x.conf+'%')+'</div>';}
     var bt='';
-    if(x.backtest){var b=x.backtest;bt='<div class="lv">Backtest on this chart: <b>'+b.n+'</b> trades · <b>'+b.win_rate+'%</b> win · profit factor <b class="'+(b.pf>=1.2?'pos':'neg')+'">'+b.pf+'</b> · <b class="'+cls(b.avg_r)+'">'+(b.avg_r>0?'+':'')+b.avg_r+'R</b> avg</div>';}
+    if(x.backtest){var b=x.backtest;
+      bt='<div class="lv">Backtest (net of fees/funding/slippage): <b>'+b.n+'</b> trades · <b>'+b.win_rate+'%</b> win · PF <b class="'+(b.pf>=1.2?'pos':'neg')+'">'+b.pf+'</b> · net <b class="'+cls(b.avg_r)+'">'+(b.avg_r>0?'+':'')+b.avg_r+'R</b>'
+        +(b.gross_avg_r!=null?' <span class="dim">(gross '+(b.gross_avg_r>0?'+':'')+b.gross_avg_r+'R — costs took '+(b.gross_avg_r-b.avg_r).toFixed(2)+'R)</span>':'')+'</div>'
+        +(b.oos_n?'<div class="lv">Out-of-sample (recent unseen data): <b>'+b.oos_n+'</b> trades · PF <b class="'+(b.oos_pf>=1?'pos':'neg')+'">'+b.oos_pf+'</b> · <b class="'+cls(b.oos_avg_r)+'">'+(b.oos_avg_r>0?'+':'')+b.oos_avg_r+'R</b> '+(b.oos_avg_r>0?'✓ edge holds':'✗ edge weak on unseen data')+'</div>':'');}
     var tr='';
     if(x.trade){var t=x.trade;tr='<div class="lv">Planned trade: entry <b>'+t.entry+'</b> · stop <b>'+t.stop+'</b> · target <b>'+t.target+'</b> · reward:risk <b>'+t.rr+':1</b></div>';}
     var lv='';
@@ -784,7 +811,8 @@ function render(data){
     j.forEach(function(e){rt+='<tr><td>'+(e.symbol||'').split('/')[0]+'</td><td>'+e.tf+'</td><td class="'+(e.dir>0?"long":"short")+'">'+(e.dir>0?'LONG':'SHORT')+'</td><td class="dim">'+e.result+'</td><td class="'+cls(e.r)+'">'+sign(e.r)+'R</td></tr>';});
     rc.innerHTML=rt+'</table>';}
   // config footer + charts
-  document.getElementById('cfgline').textContent='Trigger: '+s.trigger+' · confidence floor '+s.min_conf+'% · timeframes '+(s.timeframes||[]).join(', ')+' · risk '+s.risk_band[0]+'–'+s.risk_band[1]+'% (cap '+s.risk_band[2]+'%) · leverage '+Object.keys(s.lev_map||{}).map(function(k){return k+' '+s.lev_map[k]+'x';}).join(' / ');
+  var costTxt=s.costs?(' · backtest costs: fee '+s.costs.fee.toFixed(2)+'%/side, slippage '+s.costs.slip.toFixed(2)+'%/side, funding '+s.costs.funding.toFixed(2)+'%/day'):'';
+  document.getElementById('cfgline').textContent='Trigger: '+s.trigger+' · confidence floor '+s.min_conf+'% · timeframes '+(s.timeframes||[]).join(', ')+' · risk '+s.risk_band[0]+'–'+s.risk_band[1]+'% (cap '+s.risk_band[2]+'%) · leverage '+Object.keys(s.lev_map||{}).map(function(k){return k+' '+s.lev_map[k]+'x';}).join(' / ')+costTxt;
   var syms=[];(data.analysis||[]).forEach(function(x){if(syms.indexOf(x.symbol)<0)syms.push(x.symbol);});
   if(!syms.length&&s.open)s.open.forEach(function(p){if(syms.indexOf(p.symbol)<0)syms.push(p.symbol);});
   buildCharts(syms);
@@ -863,7 +891,9 @@ def run():
         "open_count": 0, "open": [], "recent": [], "trigger": CFG["TRIGGER"],
         "min_conf": CFG["MIN_CONFIDENCE"], "timeframes": [t.strip() for t in CFG["TIMEFRAMES"]],
         "risk_band": [CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100],
-        "lev_map": CFG["MAX_LEVERAGE_MAP"], "ts": time.time(),
+        "lev_map": CFG["MAX_LEVERAGE_MAP"],
+        "costs": {"fee": CFG["FEE_RATE"] * 100, "slip": CFG["SLIPPAGE"] * 100, "funding": CFG["FUNDING_DAILY"] * 100},
+        "ts": time.time(),
     }
     log.info("Connecting to the exchange and loading markets…")
     ex = Exchange()
@@ -948,7 +978,9 @@ def log_status(ex, state):
         "trigger": CFG["TRIGGER"], "min_conf": CFG["MIN_CONFIDENCE"],
         "timeframes": [t.strip() for t in CFG["TIMEFRAMES"]],
         "risk_band": [CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100],
-        "lev_map": CFG["MAX_LEVERAGE_MAP"], "ts": time.time(),
+        "lev_map": CFG["MAX_LEVERAGE_MAP"],
+        "costs": {"fee": CFG["FEE_RATE"] * 100, "slip": CFG["SLIPPAGE"] * 100, "funding": CFG["FUNDING_DAILY"] * 100},
+        "ts": time.time(),
     }
 
 def scan_and_trade(ex, state, equity):
@@ -1008,12 +1040,19 @@ def scan_and_trade(ex, state, equity):
             closes = [c["c"] for c in candles]
             if signal_stability(closes, an["e20"]) >= 3:      # whipsaw gate
                 blocked("whipsaw (signal keeps flipping)"); continue
-            bt = backtest(candles)
+            bt = backtest(candles, TF_MIN.get(tf, 60))
+            oos = bt.get("oos", {"n": 0, "avg_r": 0, "profit_factor": 0})
             row["backtest"] = {"n": bt["n"], "win_rate": round(bt["win_rate"]),
-                               "pf": round(bt["profit_factor"], 2), "avg_r": round(bt["avg_r"], 2)}
+                               "pf": round(bt["profit_factor"], 2), "avg_r": round(bt["avg_r"], 2),
+                               "gross_avg_r": round(bt.get("gross_avg_r", 0), 2),
+                               "oos_n": oos["n"], "oos_pf": round(oos["profit_factor"], 2),
+                               "oos_avg_r": round(oos["avg_r"], 2)}
             if bt["n"] >= 6 and (bt["avg_r"] <= 0 or bt["profit_factor"] < 1.2):
-                blocked("backtest edge too weak (PF %.2f, %+0.2fR over %d trades)"
+                blocked("edge too weak AFTER costs (PF %.2f, %+0.2fR over %d trades)"
                         % (bt["profit_factor"], bt["avg_r"], bt["n"])); continue
+            if oos["n"] >= 6 and oos["avg_r"] <= 0:   # edge doesn't hold on unseen data
+                blocked("edge fails out-of-sample (recent PF %.2f over %d trades)"
+                        % (oos["profit_factor"], oos["n"])); continue
             # timeframe alignment: how many OTHER timeframes of this symbol agree
             agree = sum(1 for otf, oo in tfs.items()
                         if otf != tf and abs(oo["an"]["score"]) >= enter_th

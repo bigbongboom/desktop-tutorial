@@ -32,6 +32,7 @@ import time
 import json
 import math
 import logging
+from collections import deque
 from datetime import datetime, timezone
 
 try:
@@ -120,6 +121,7 @@ CFG = {
 
 # Live snapshot the local web page reads (never persisted, never leaves the laptop).
 LATEST = {"status": None, "analysis": [], "closest": None, "scan_ts": None}
+LOG_LINES = deque(maxlen=300)   # rolling activity feed shown on the web page
 
 # Make the console tolerate any character on Windows (cp1252 can't draw some).
 try:
@@ -133,6 +135,17 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(), logging.FileHandler("trader.log", encoding="utf-8")],
 )
 log = logging.getLogger("trader")
+
+# Mirror every log line into a buffer the web page shows as a live activity feed.
+class _WebLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            LOG_LINES.append(self.format(record))
+        except Exception:
+            pass
+_wlh = _WebLogHandler()
+_wlh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", "%H:%M:%S"))
+log.addHandler(_wlh)
 
 # --------------------------------------------------------------------------
 # Indicators — faithful ports of the dashboard engine
@@ -600,12 +613,15 @@ WATCH_PAGE = """<!doctype html>
   .chart-h{padding:8px 12px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line)}
   .tvc{height:320px}
   .empty{color:var(--dim);padding:8px 2px}
+  .logfeed{background:#080b11;border:1px solid var(--line);border-radius:8px;padding:10px 12px;height:260px;overflow:auto;margin:0;
+    font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#aebccd;white-space:pre-wrap;word-break:break-word}
+  #live{font-weight:700}
   .flash{animation:fl .6s}@keyframes fl{from{background:#1c2740}to{background:transparent}}
   .foot{color:var(--dim);font-size:11px;margin-top:20px;line-height:1.7}
 </style></head>
 <body><div class="wrap">
   <h1>Crypto Signal Desk — Bot Monitor <span id="mode" class="badge dry">starting…</span></h1>
-  <p class="sub">Live view of the bot running on this machine. Updates every few seconds. <span id="clock"></span></p>
+  <p class="sub"><span id="live">○ connecting…</span> · Live view of the bot running on this machine. <span id="clock"></span></p>
 
   <div class="kpis">
     <div class="kpi"><div class="l">Simulated balance</div><div class="v" id="bal">—</div></div>
@@ -614,6 +630,8 @@ WATCH_PAGE = """<!doctype html>
     <div class="kpi"><div class="l">Closed trades</div><div class="v" id="nt">—</div></div>
     <div class="kpi"><div class="l">Open now</div><div class="v" id="op">—</div></div>
   </div>
+
+  <div class="card"><h2>Live activity — exactly what it's doing right now</h2><pre id="logfeed" class="logfeed">waiting for the bot…</pre></div>
 
   <div class="card"><h2>Open positions</h2><div id="open"></div></div>
 
@@ -632,6 +650,11 @@ WATCH_PAGE = """<!doctype html>
 </div>
 <script>
 var chartsBuilt=false;
+function setLive(ok,txt){var e=document.getElementById('live');e.textContent=(ok?'● ':'○ ')+txt;e.style.color=ok?'var(--grn)':'var(--dim)';}
+function renderLog(lines){var lf=document.getElementById('logfeed');if(!lines||!lines.length)return;
+  var atBottom=lf.scrollHeight-lf.scrollTop-lf.clientHeight<40;
+  lf.textContent=lines.join('\\n');
+  if(atBottom)lf.scrollTop=lf.scrollHeight;}
 function fmtMoney(v){return v==null?'—':'$'+Number(v).toFixed(2);}
 function cls(v){return v>0?'pos':v<0?'neg':'dim';}
 function sign(v){return (v>0?'+':'')+Number(v).toFixed(2);}
@@ -690,8 +713,12 @@ function render(data){
 function poll(){
   fetch('/api/state').then(function(r){return r.json();}).then(function(d){
     document.getElementById('clock').textContent='Last update '+new Date().toLocaleTimeString();
+    var fresh=d.status&&d.now&&d.status.ts&&(d.now-d.status.ts)<120;
+    setLive(true, fresh?'live — bot is running':'connected, bot is starting up…');
+    renderLog(d.log);
     render(d);
-  }).catch(function(){document.getElementById('clock').textContent='(waiting for the bot…)';});
+  }).catch(function(){setLive(false,'waiting — is the bot running? (python trader.py)');
+    document.getElementById('clock').textContent='';});
 }
 poll();setInterval(poll,5000);
 </script>
@@ -718,6 +745,7 @@ def _start_web_server():
                     "analysis": LATEST.get("analysis"),
                     "closest": LATEST.get("closest"),
                     "scan_ts": LATEST.get("scan_ts"),
+                    "log": list(LOG_LINES)[-80:],
                     "now": time.time(),
                 }, default=str).encode("utf-8")
                 self._send(200, payload, "application/json")
@@ -749,7 +777,20 @@ def run():
         log.warning("!!! LIVE REAL-MONEY MODE — orders will be placed with real funds !!!")
         time.sleep(5)
     _start_web_server()
+    # publish an immediate boot status so the page shows life before the first scan
+    mode0 = "DRY-RUN (no real money)" if CFG["DRY_RUN"] else ("DEMO" if CFG["USE_DEMO"] else "LIVE REAL MONEY")
+    LATEST["status"] = {
+        "mode": mode0, "balance": 100.0, "cum_r": 0, "closed": 0, "win_rate": 0,
+        "open_count": 0, "open": [], "recent": [], "trigger": CFG["TRIGGER"],
+        "min_conf": CFG["MIN_CONFIDENCE"], "timeframes": [t.strip() for t in CFG["TIMEFRAMES"]],
+        "risk_band": [CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100],
+        "lev_map": CFG["MAX_LEVERAGE_MAP"], "ts": time.time(),
+    }
+    log.info("Connecting to the exchange and loading markets…")
     ex = Exchange()
+    log.info("Connected. Scanning %s on %s every %ds. First results within a minute.",
+             ",".join(b.strip() for b in CFG["SYMBOLS"]), ",".join(t.strip() for t in CFG["TIMEFRAMES"]),
+             CFG["POLL_SECONDS"])
     state = load_state()
 
     while True:

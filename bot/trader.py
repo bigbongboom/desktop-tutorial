@@ -89,6 +89,7 @@ CFG = {
     "DRY_RUN":         _bool("DRY_RUN", True),          # place no real orders
     "USE_DEMO":        _bool("USE_DEMO", True),         # Kraken Futures demo/testnet
     "SYMBOLS":         os.getenv("SYMBOLS", "BTC,ETH,SOL").split(","),  # base coins; resolved to real perp symbols
+    "DATA_SOURCE":     os.getenv("DATA_SOURCE", "binance").lower(),     # where CHART DATA comes from: "binance" or "kraken"
     "TIMEFRAMES":      os.getenv("TIMEFRAMES", "15m,1h,4h,1d").split(","),  # NEVER 1m — noise
     "POLL_SECONDS":    int(_num("POLL_SECONDS", 60)),
     "MIN_CONFIDENCE":  _num("MIN_CONFIDENCE", 60),      # confidence floor
@@ -676,8 +677,38 @@ class Exchange:
         if CFG["USE_DEMO"] and not CFG["DRY_RUN"]:
             self.ex.set_sandbox_mode(True)  # Kraken Futures demo/testnet
         self.ex.load_markets()
-        self.trade_symbols = self._resolve_symbols([b.strip().upper() for b in CFG["SYMBOLS"] if b.strip()])
         self._equity_warned = False
+        bases = [b.strip().upper() for b in CFG["SYMBOLS"] if b.strip()]
+
+        # CHART DATA source: Binance (what the user asked for) with a safe fallback to
+        # Kraken if Binance can't be reached (some networks/regions block it).
+        self.source = CFG["DATA_SOURCE"]
+        self.data_ex = None
+        if self.source == "binance":
+            try:
+                self.data_ex = ccxt.binance({"enableRateLimit": True})
+                self.data_ex.load_markets()
+                self.trade_symbols = self._resolve_binance(bases)
+                if not self.trade_symbols:
+                    raise RuntimeError("no BTC/ETH/SOL USDT pairs found")
+                log.info("Chart data: Binance (live)")
+            except Exception as e:
+                log.warning("Binance data unavailable (%s) — falling back to Kraken data.", e)
+                self.source = "kraken"; self.data_ex = None
+        if self.data_ex is None:
+            self.trade_symbols = self._resolve_symbols(bases)
+            log.info("Chart data: Kraken Futures")
+
+    def _resolve_binance(self, bases):
+        """Map base coins to Binance USDT spot pairs (BTC/USDT, ...) for live charts."""
+        out = []
+        for base in bases:
+            sym = base + "/USDT"
+            if sym in self.data_ex.markets:
+                out.append(sym); log.info("resolved %s -> %s (Binance)", base, sym)
+            else:
+                log.warning("Binance has no %s pair", sym)
+        return out
 
     def _resolve_symbols(self, bases):
         """Find the real linear USD perpetual symbol for each requested base coin,
@@ -706,7 +737,8 @@ class Exchange:
         return out
 
     def candles(self, symbol, timeframe, limit=400):
-        raw = self.ex.fetch_ohlcv(symbol, timeframe, limit=limit)
+        ex = self.data_ex or self.ex
+        raw = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
         return [{"t": r[0], "o": r[1], "h": r[2], "l": r[3], "c": r[4], "v": r[5]} for r in raw]
 
     def equity(self):
@@ -757,6 +789,7 @@ TF_MIN = {"1m": 1, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 WATCH_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BAT-TRADER // Crypto Signal Desk</title>
+<script src="https://s3.tradingview.com/tv.js"></script>
 <style>
   :root{--bg:#08090c;--card:#0f1115;--card2:#0c0d11;--line:#1c1f26;--edge:#2a2e37;--tx:#e8eaed;--dim:#767d8a;--grn:#24d17e;--red:#ff5266;--amb:#ffd23f}
   *{box-sizing:border-box}
@@ -799,6 +832,10 @@ WATCH_PAGE = """<!doctype html>
   .sc-h .t{font-weight:800;letter-spacing:.05em}
   .sc-h .cf{font-size:12px;color:var(--dim)}
   .cv{display:block;width:100%;height:170px;background:#070809}
+  .pro{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:12px}
+  .pbox{background:#0b0c10;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .pbox .ph{padding:8px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.06em}
+  .tvc{height:420px}
   .sc-b{padding:9px 12px;font-size:12px}
   .sc-b .pat{color:var(--amb);font-weight:700}
   .sc-b .row2{color:var(--dim);margin-top:4px;line-height:1.5}.sc-b .row2 b{color:var(--tx)}
@@ -833,6 +870,9 @@ WATCH_PAGE = """<!doctype html>
     <div id="closest" class="empty"></div>
     <div id="scan" class="scan" style="margin-top:10px"></div>
   </div>
+
+  <div class="card"><h2>▸ Pro charts — full TradingView with the indicators the bot reads (live from Binance)</h2>
+    <div id="prochart" class="pro"></div></div>
 
   <div class="card"><h2>▸ Live activity feed</h2><pre id="logfeed" class="logfeed">waiting for the bot…</pre></div>
 
@@ -888,6 +928,21 @@ function renderScan(rows){
 function fmtMoney(v){return v==null?'—':'$'+Number(v).toFixed(2);}
 function cls(v){return v>0?'pos':v<0?'neg':'dim';}
 function sign(v){return (v>0?'+':'')+Number(v).toFixed(2);}
+var proBuilt=false;
+function buildProCharts(syms){
+  if(proBuilt||!window.TradingView||!syms.length)return;
+  var wrap=document.getElementById('prochart');wrap.innerHTML='';
+  syms.forEach(function(b){
+    var id='pv_'+b;var d=document.createElement('div');d.className='pbox';
+    d.innerHTML='<div class="ph">'+b+'/USDT · 15m · Binance</div><div id="'+id+'" class="tvc"></div>';
+    wrap.appendChild(d);
+    new TradingView.widget({container_id:id,symbol:'BINANCE:'+b+'USDT',interval:'15',theme:'dark',
+      style:'1',locale:'en',autosize:true,hide_side_toolbar:false,allow_symbol_change:false,
+      studies:['MASimple@tv-basicstudies','MAExp@tv-basicstudies','BB@tv-basicstudies',
+               'RSI@tv-basicstudies','MACD@tv-basicstudies']});
+  });
+  proBuilt=true;
+}
 function render(data){
   var s=data.status;
   if(!s){return;}
@@ -919,6 +974,9 @@ function render(data){
   var cl=document.getElementById('closest');
   cl.textContent=data.closest?('Closest setup: '+data.closest):(s.open_count?'Fully deployed ('+s.open_count+' open) — not scanning for more right now.':'Scanning…');
   renderScan(data.analysis);
+  var syms=[];(data.analysis||[]).forEach(function(x){if(syms.indexOf(x.symbol)<0)syms.push(x.symbol);});
+  if(!syms.length&&s.open)s.open.forEach(function(p){if(syms.indexOf(p.symbol)<0)syms.push(p.symbol);});
+  buildProCharts(syms);
   // recent trades
   var rc=document.getElementById('recent');var j=s.recent||[];
   if(!j.length){rc.innerHTML='<div class="empty">No closed trades yet.</div>';}

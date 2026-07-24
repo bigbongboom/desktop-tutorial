@@ -91,10 +91,14 @@ CFG = {
     "SYMBOLS":         os.getenv("SYMBOLS", "BTC,ETH,SOL").split(","),  # base coins; resolved to real perp symbols
     "TIMEFRAMES":      os.getenv("TIMEFRAMES", "15m,1h,4h,1d").split(","),  # NEVER 1m — noise
     "POLL_SECONDS":    int(_num("POLL_SECONDS", 60)),
-    "MIN_CONFIDENCE":  _num("MIN_CONFIDENCE", 63),      # confidence floor ("balanced")
+    "MIN_CONFIDENCE":  _num("MIN_CONFIDENCE", 60),      # confidence floor
     "ENTER_THRESHOLD": _num("ENTER_THRESHOLD", 18),
     "STRONG_THRESHOLD":_num("STRONG_THRESHOLD", 45),
-    "TRIGGER":         os.getenv("TRIGGER", "standard"),  # "standard" (±18) or "strong" (±45 only)
+    "TRIGGER":         os.getenv("TRIGGER", "standard"),  # momentum only: "standard"/"strong"
+    # STRATEGY: "reversion" = buy proven bullish reversals at oversold extremes / short
+    # bearish reversals at overbought extremes (candlestick patterns, NOT chasing).
+    # "momentum" = the old trend-following score. Reversion is the new default.
+    "STRATEGY":        os.getenv("STRATEGY", "reversion"),
     "EXIT_STYLE":      os.getenv("EXIT_STYLE", "hard"), # "hard" (stops) or "diamond"
     # Leverage: per-market ceiling (BTC 40x / ETH 25x / SOL 20x / HYPE 5x) — same as
     # the dashboard. MAX_LEVERAGE>0 acts as an extra hard cap over ALL markets (for
@@ -367,6 +371,107 @@ def signal_stability(closes, e20):
             crossings += 1
     return crossings
 
+# --------------------------------------------------------------------------
+# Candlestick pattern detection — the "scan candles for patterns that win"
+# --------------------------------------------------------------------------
+def _body(c):  return abs(c["c"] - c["o"])
+def _rng(c):   return max(c["h"] - c["l"], 1e-9)
+def _upw(c):   return c["h"] - max(c["o"], c["c"])
+def _low(c):   return min(c["o"], c["c"]) - c["l"]
+def _green(c): return c["c"] >= c["o"]
+
+def detect_patterns(candles, i):
+    """Reversal candlestick patterns ending at bar i. Returns (name, dir, strength).
+    A pattern REQUIRES the candle to actually reject/turn — a big red candle that
+    keeps falling with no lower-wick rejection produces NO bullish pattern, so the
+    bot won't try to catch a knife that's 'obviously going to keep going down'."""
+    out = []
+    if i < 2:
+        return out
+    c, p = candles[i], candles[i - 1]
+    body, rng = _body(c), _rng(c)
+    upw, low = _upw(c), _low(c)
+    # Hammer (bullish): long lower wick rejection, small body up top, closes green
+    if body > 0 and low >= 2 * body and upw <= body and _green(c):
+        out.append(("Hammer", 1, clamp(low / rng, 0.3, 1)))
+    # Shooting star (bearish): long upper wick rejection, closes red
+    if body > 0 and upw >= 2 * body and low <= body and not _green(c):
+        out.append(("Shooting star", -1, clamp(upw / rng, 0.3, 1)))
+    # Bullish engulfing: green candle whose body swallows the prior red body
+    if _green(c) and not _green(p) and c["c"] >= p["o"] and c["o"] <= p["c"] and body > _body(p):
+        out.append(("Bullish engulfing", 1, clamp(body / _rng(p), 0.4, 1)))
+    # Bearish engulfing
+    if not _green(c) and _green(p) and c["o"] >= p["c"] and c["c"] <= p["o"] and body > _body(p):
+        out.append(("Bearish engulfing", -1, clamp(body / _rng(p), 0.4, 1)))
+    # Tweezer bottom / top: matched extreme two bars running, second one reverses
+    if abs(c["l"] - p["l"]) <= 0.12 * rng and _green(c) and not _green(p):
+        out.append(("Tweezer bottom", 1, 0.55))
+    if abs(c["h"] - p["h"]) <= 0.12 * rng and not _green(c) and _green(p):
+        out.append(("Tweezer top", -1, 0.55))
+    return out
+
+def _swing(candles, i, look=40):
+    w = candles[max(0, i - look):i + 1]
+    return min(x["l"] for x in w), max(x["h"] for x in w)
+
+def reversion_signal(candles, i, ind):
+    """Buy a bullish reversal pattern only when OVERSOLD/stretched-down; short a
+    bearish reversal pattern only when OVERBOUGHT/stretched-up. The pattern is the
+    proof the move is turning — no pattern, no trade."""
+    price = candles[i]["c"]
+    atr = ind["atr"]
+    if atr <= 0:
+        return None
+    r = ind["rsi"][i] if ind["rsi"][i] is not None else 50
+    bbl, bbu, e20 = ind["bbl"][i], ind["bbu"][i], ind["e20"][i]
+    support, resistance = _swing(candles, i)
+    pats = detect_patterns(candles, i)
+    bull = [p for p in pats if p[1] > 0]
+    bear = [p for p in pats if p[1] < 0]
+    oversold = (r < 40) or (bbl is not None and price <= bbl) or (e20 is not None and price <= e20 - 1.0 * atr)
+    overbought = (r > 60) or (bbu is not None and price >= bbu) or (e20 is not None and price >= e20 + 1.0 * atr)
+    if bull and oversold:
+        return {"dir": 1, "patterns": [p[0] for p in bull], "strength": max(p[2] for p in bull),
+                "extremity": clamp((45 - r) / 25, 0, 1), "ctx": "oversold (RSI %.0f) + bullish reversal" % r,
+                "support": support, "resistance": resistance}
+    if bear and overbought:
+        return {"dir": -1, "patterns": [p[0] for p in bear], "strength": max(p[2] for p in bear),
+                "extremity": clamp((r - 55) / 25, 0, 1), "ctx": "overbought (RSI %.0f) + bearish reversal" % r,
+                "support": support, "resistance": resistance}
+    return None
+
+def momentum_signal(candles, i, ind):
+    """Legacy trend-following entry (kept for A/B comparison)."""
+    need = CFG["STRONG_THRESHOLD"] if CFG["TRIGGER"] == "strong" else CFG["ENTER_THRESHOLD"]
+    if abs(ind["score"]) < need:
+        return None
+    d = 1 if ind["score"] > 0 else -1
+    support, resistance = _swing(candles, i)
+    return {"dir": d, "patterns": [], "strength": min(abs(ind["score"]) / 70, 1), "extremity": 0,
+            "ctx": "momentum score %+d" % ind["score"], "support": support, "resistance": resistance}
+
+def signal_at(candles, i):
+    """Single source of truth for 'is there a trade at bar i?' — used by BOTH the live
+    scan and the backtest, so the backtested edge reflects exactly what it trades."""
+    ind = analyze(candles[:i + 1])
+    if CFG["STRATEGY"] == "momentum":
+        return momentum_signal(candles, i, ind), ind
+    return reversion_signal(candles, i, ind), ind
+
+def reversion_confidence(strength, extremity, bt):
+    conf = 40 + strength * 25 + clamp(extremity, 0, 1) * 15
+    if bt["n"]:
+        shrink = bt["n"] / (bt["n"] + 10)
+        conf += clamp(clamp(bt["avg_r"], -1, 1) * shrink * 30, -15, 15)
+    oos = bt.get("oos", {})
+    if oos.get("n", 0) >= 5:
+        conf += 5 if oos["avg_r"] > 0 else -8
+    return round(clamp(conf, 5, 95))
+
+def _mini_candles(candles, n=60):
+    w = candles[-n:]
+    return [{"o": round(c["o"], 2), "h": round(c["h"], 2), "l": round(c["l"], 2), "c": round(c["c"], 2)} for c in w]
+
 def _bt_stats(rlist):
     n = len(rlist)
     wins = [r for r in rlist if r > 0]
@@ -404,12 +509,10 @@ def backtest(candles, tf_minutes=60):
                 fills.append((pos["open_i"], gross_R, gross_R - cost_R))
                 pos = None
             continue
-        sub = candles[: i + 1]
-        an = analyze(sub)
-        need = CFG["STRONG_THRESHOLD"] if CFG["TRIGGER"] == "strong" else CFG["ENTER_THRESHOLD"]
-        if abs(an["score"]) < need:
+        sig, an = signal_at(candles, i)
+        if not sig:
             continue
-        d = 1 if an["score"] > 0 else -1
+        d = sig["dir"]
         atr_now = an["atr"]
         entry = candles[i + 1]["o"]
         stop_d = CFG["STOP_ATR"] * atr_now
@@ -653,145 +756,138 @@ TF_MIN = {"1m": 1, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 # --------------------------------------------------------------------------
 WATCH_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Crypto Signal Desk — Bot Monitor</title>
-<script src="https://s3.tradingview.com/tv.js"></script>
+<title>BAT-TRADER // Crypto Signal Desk</title>
 <style>
-  :root{--bg:#0b0e14;--card:#141922;--line:#232a36;--tx:#e6edf3;--dim:#8b98a9;--grn:#26d07c;--red:#f0616d;--amb:#f5b74e;--acc:#4f9dff}
-  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial}
-  .wrap{max-width:1200px;margin:0 auto;padding:18px}
-  h1{font-size:18px;margin:0 0 2px}.sub{color:var(--dim);font-size:12px;margin:0 0 16px}
-  .badge{display:inline-block;padding:3px 10px;border-radius:999px;font-weight:700;font-size:12px}
-  .dry{background:#1d2a44;color:#8fb7ff}.demo{background:#173a2c;color:#6ce3a6}.live{background:#4a1418;color:#ff9aa2}
-  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
-  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
-  .kpi .l{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
-  .kpi .v{font-size:22px;font-weight:700;margin-top:3px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
-  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px}
+  :root{--bg:#08090c;--card:#0f1115;--card2:#0c0d11;--line:#1c1f26;--edge:#2a2e37;--tx:#e8eaed;--dim:#767d8a;--grn:#24d17e;--red:#ff5266;--amb:#ffd23f}
+  *{box-sizing:border-box}
+  body{margin:0;background:
+      radial-gradient(1100px 380px at 50% -140px,rgba(255,210,63,.06),transparent 70%),var(--bg);
+    color:var(--tx);font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  .wrap{max-width:1240px;margin:0 auto;padding:16px 18px 40px}
+  .top{border-top:3px solid var(--amb);margin:-16px -18px 14px;padding:16px 18px 0}
+  h1{font-size:19px;margin:0 0 2px;letter-spacing:.14em;text-transform:uppercase;font-weight:800}
+  h1 .bat{color:var(--amb)}
+  .sub{color:var(--dim);font-size:12px;margin:0 0 6px}
+  .badge{display:inline-block;padding:3px 10px;border-radius:4px;font-weight:800;font-size:11px;letter-spacing:.06em}
+  .dry{background:#141a2e;color:#9fb7ff}.demo{background:#0f2c22;color:#5fe3a2}.live{background:#3a1014;color:#ff8f98}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:14px 0}
+  .kpi{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);border-radius:8px;padding:11px 13px}
+  .kpi .l{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.09em}
+  .kpi .v{font-size:23px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums}
+  .card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);border-radius:8px;padding:13px 15px;margin:12px 0}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.11em;color:var(--amb);margin:0 0 10px;font-weight:800}
   table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
-  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  th{color:var(--dim);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+  td{font-variant-numeric:tabular-nums}
   .pos{color:var(--grn)}.neg{color:var(--red)}.dim{color:var(--dim)}
-  .pill{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700}
-  .p-cand{background:#173a2c;color:#6ce3a6}.p-block{background:#2a2230;color:#c6a9d6}.p-watch{background:#1f2733;color:#9fb2c9}
-  .long{color:var(--grn);font-weight:700}.short{color:var(--red);font-weight:700}
-  .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
-  .chartbox{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-  .chart-h{padding:8px 12px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line)}
-  .tvc{height:320px}
-  .empty{color:var(--dim);padding:8px 2px}
-  .logfeed{background:#080b11;border:1px solid var(--line);border-radius:8px;padding:10px 12px;height:260px;overflow:auto;margin:0;
-    font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#aebccd;white-space:pre-wrap;word-break:break-word}
-  #live{font-weight:700}
-  .xr{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#0f141c}
-  .xr-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px}
-  .xr-h .t{font-weight:700;font-size:14px}
-  .rd{display:grid;grid-template-columns:1fr 1fr;gap:0 22px;font-size:12.5px;margin:6px 0}
-  .rd .r{display:flex;justify-content:space-between;border-bottom:1px solid #1a212c;padding:4px 0}
-  .rd .r .kk{color:var(--dim)}
-  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0 4px}
-  .chip{background:#141b26;border:1px solid var(--line);border-radius:6px;padding:3px 9px;font-size:12px;color:var(--dim)}
-  .chip b{color:var(--tx)}
-  .lv{font-size:12px;color:var(--dim);margin-top:5px}.lv b{color:var(--tx)}
-  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
-  .btn{background:#1b2432;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
-  .btn:hover{background:#232f40}
-  .btn.warn{background:#3a2f16;border-color:#5a4a1e;color:#f5cf7e}
-  .btn.danger{background:#3a1820;border-color:#5a2530;color:#ff9aa2}
-  .btn.mini{padding:4px 10px;font-size:12px}
-  .pausebar{background:#3a2f16;border:1px solid #5a4a1e;color:#f5cf7e;border-radius:8px;padding:8px 12px;font-weight:600;font-size:13px;display:none;margin:10px 0}
-  .flash{animation:fl .6s}@keyframes fl{from{background:#1c2740}to{background:transparent}}
+  .long{color:var(--grn);font-weight:800}.short{color:var(--red);font-weight:800}
+  .empty{color:var(--dim);padding:10px 2px}
+  .logfeed{background:#050608;border:1px solid var(--line);border-radius:6px;padding:10px 12px;height:250px;overflow:auto;margin:0;
+    font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#9fb0bf;white-space:pre-wrap;word-break:break-word}
+  #live{font-weight:800;letter-spacing:.04em}
+  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 2px}
+  .btn{background:#12151b;color:var(--tx);border:1px solid var(--edge);border-radius:6px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.03em;text-transform:uppercase}
+  .btn:hover{border-color:var(--amb)}
+  .btn.warn{color:var(--amb);border-color:#4a3d12}
+  .btn.danger{color:#ff8f98;border-color:#4a1c22}
+  .btn.mini{padding:4px 10px;font-size:11px}
+  .pausebar{background:#241d08;border:1px solid #4a3d12;color:var(--amb);border-radius:6px;padding:8px 12px;font-weight:700;font-size:12px;display:none;margin:10px 0}
+  .scan{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+  .sc{background:#0b0c10;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .sc.ready{border-color:#1f6b46;box-shadow:0 0 0 1px rgba(36,209,126,.25) inset}
+  .sc-h{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line)}
+  .sc-h .t{font-weight:800;letter-spacing:.05em}
+  .sc-h .cf{font-size:12px;color:var(--dim)}
+  .cv{display:block;width:100%;height:170px;background:#070809}
+  .sc-b{padding:9px 12px;font-size:12px}
+  .sc-b .pat{color:var(--amb);font-weight:700}
+  .sc-b .row2{color:var(--dim);margin-top:4px;line-height:1.5}.sc-b .row2 b{color:var(--tx)}
+  .tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase}
+  .t-ready{background:#0f2c22;color:#5fe3a2}.t-block{background:#241a10;color:#d8a86a}.t-watch{background:#15181f;color:#8b94a3}
   .foot{color:var(--dim);font-size:11px;margin-top:20px;line-height:1.7}
 </style></head>
 <body><div class="wrap">
-  <h1>Crypto Signal Desk — Bot Monitor <span id="mode" class="badge dry">starting…</span></h1>
-  <p class="sub"><span id="live">○ connecting…</span> · Live view of the bot running on this machine. <span id="clock"></span></p>
+  <div class="top">
+    <h1><span class="bat">◤</span> BAT-TRADER <span class="bat">◢</span> <span class="dim" style="font-weight:600;letter-spacing:.06em">CRYPTO SIGNAL DESK</span> <span id="mode" class="badge dry">starting…</span></h1>
+    <p class="sub"><span id="live">○ connecting…</span> · pattern-reversion engine · watching for proven reversals at extremes · <span id="clock"></span></p>
+  </div>
 
   <div class="controls">
     <button id="pauseBtn" class="btn warn" onclick="togglePause()">⏸ Pause new trades</button>
     <button class="btn danger" onclick="closeAll()">✕ Close ALL positions</button>
-    <span class="dim" style="font-size:12px">Manual control — acts within a couple of seconds. (To stop the bot entirely, close its terminal window / Ctrl+C.)</span>
+    <span class="dim" style="font-size:11px;text-transform:none;letter-spacing:0">Acts within ~2s. Full stop = close the terminal / Ctrl+C.</span>
   </div>
-  <div id="pausebar" class="pausebar">⏸ PAUSED — the bot is not opening new trades. It still manages and lets you close open ones.</div>
+  <div id="pausebar" class="pausebar">⏸ PAUSED — not opening new trades. Still manages and lets you close open ones.</div>
 
   <div class="kpis">
-    <div class="kpi"><div class="l">Simulated balance</div><div class="v" id="bal">—</div></div>
+    <div class="kpi"><div class="l">Balance</div><div class="v" id="bal">—</div></div>
     <div class="kpi"><div class="l">Realized</div><div class="v" id="cumr">—</div></div>
     <div class="kpi"><div class="l">Win rate</div><div class="v" id="wr">—</div></div>
-    <div class="kpi"><div class="l">Closed trades</div><div class="v" id="nt">—</div></div>
+    <div class="kpi"><div class="l">Closed</div><div class="v" id="nt">—</div></div>
     <div class="kpi"><div class="l">Open now</div><div class="v" id="op">—</div></div>
   </div>
 
-  <div class="card"><h2>Live activity — exactly what it's doing right now</h2><pre id="logfeed" class="logfeed">waiting for the bot…</pre></div>
+  <div class="card"><h2>▸ Open positions</h2><div id="open"></div></div>
 
-  <div class="card"><h2>Open positions</h2><div id="open"></div></div>
-
-  <div class="card"><h2>Live scan — what the bot is looking at right now</h2>
+  <div class="card"><h2>▸ Pattern scan — the charts it's reading, live</h2>
     <div id="closest" class="empty"></div>
-    <div id="grid" style="margin-top:8px"></div>
+    <div id="scan" class="scan" style="margin-top:10px"></div>
   </div>
 
-  <div class="card"><h2>How the bot is reading the charts (its analysis)</h2><div id="xray"></div></div>
+  <div class="card"><h2>▸ Live activity feed</h2><pre id="logfeed" class="logfeed">waiting for the bot…</pre></div>
 
-  <div class="card"><h2>Charts the bot is analysing</h2><div id="charts" class="charts"></div></div>
-
-  <div class="card"><h2>Recent closed trades</h2><div id="recent"></div></div>
+  <div class="card"><h2>▸ Recent closed trades</h2><div id="recent"></div></div>
 
   <div class="foot" id="cfgline"></div>
-  <div class="foot">This page is served by the bot on your own computer (localhost). It shows a simulation when in DRY-RUN.
-    No orders are placed and no API keys are ever shown here or sent anywhere.</div>
+  <div class="foot">Served by the bot on your own machine (localhost). Simulation while in DRY-RUN — no orders placed, no API keys shown or sent anywhere.</div>
 </div>
 <script>
-var chartsBuilt=false;
 function setLive(ok,txt){var e=document.getElementById('live');e.textContent=(ok?'● ':'○ ')+txt;e.style.color=ok?'var(--grn)':'var(--dim)';}
 function renderLog(lines){var lf=document.getElementById('logfeed');if(!lines||!lines.length)return;
   var atBottom=lf.scrollHeight-lf.scrollTop-lf.clientHeight<40;
   lf.textContent=lines.join('\\n');
   if(atBottom)lf.scrollTop=lf.scrollHeight;}
-function chip(k,v,c){return '<span class="chip">'+k+' <b'+(c?' class="'+c+'"':'')+'>'+v+'</b></span>';}
-function renderXray(rows){
-  var xr=document.getElementById('xray');
-  var top=(rows||[]).filter(function(x){return x.read&&x.read.length;}).slice(0,4);
-  if(!top.length){xr.innerHTML='<div class="empty">Waiting for the first full scan (under a minute)…</div>';return;}
-  xr.innerHTML=top.map(function(x){
-    var head='<div class="xr-h"><div class="t">'+x.symbol+' · '+x.tf+' · <span class="'+(x.dir=="LONG"?"long":"short")+'">'+x.dir+'</span></div>'
-      +'<div class="dim">score <b class="'+cls(x.score)+'">'+(x.score>0?'+':'')+x.score+'</b> &nbsp; confidence <b style="color:var(--tx)">'+(x.conf==null?'—':x.conf+'%')+'</b></div></div>';
-    var rd='<div class="rd">'+x.read.map(function(rr){var c=rr.b=='bull'?'pos':rr.b=='bear'?'neg':'dim';
-      return '<div class="r"><span class="kk">'+rr.k+'</span><span class="'+c+'">'+rr.v+'</span></div>';}).join('')+'</div>';
-    var parts='';
-    if(x.conf_parts){var p=x.conf_parts;
-      parts='<div class="chips">'+chip('base',p.base)+chip('signal','+'+p.signal)
-        +chip('backtest',(p.backtest>0?'+':'')+p.backtest,cls(p.backtest))
-        +chip('alignment','+'+p.alignment)+chip('trend','+'+p.regime)
-        +chip('TV',(p.tv>0?'+':'')+p.tv,cls(p.tv))+chip('= confidence',x.conf+'%')+'</div>';}
-    var bt='';
-    if(x.backtest){var b=x.backtest;
-      bt='<div class="lv">Backtest (net of fees/funding/slippage): <b>'+b.n+'</b> trades · <b>'+b.win_rate+'%</b> win · PF <b class="'+(b.pf>=1.2?'pos':'neg')+'">'+b.pf+'</b> · net <b class="'+cls(b.avg_r)+'">'+(b.avg_r>0?'+':'')+b.avg_r+'R</b>'
-        +(b.gross_avg_r!=null?' <span class="dim">(gross '+(b.gross_avg_r>0?'+':'')+b.gross_avg_r+'R — costs took '+(b.gross_avg_r-b.avg_r).toFixed(2)+'R)</span>':'')+'</div>'
-        +(b.oos_n?'<div class="lv">Out-of-sample (recent unseen data): <b>'+b.oos_n+'</b> trades · PF <b class="'+(b.oos_pf>=1?'pos':'neg')+'">'+b.oos_pf+'</b> · <b class="'+cls(b.oos_avg_r)+'">'+(b.oos_avg_r>0?'+':'')+b.oos_avg_r+'R</b> '+(b.oos_avg_r>0?'✓ edge holds':'✗ edge weak on unseen data')+'</div>':'');}
-    var tr='';
-    if(x.trade){var t=x.trade;tr='<div class="lv">Planned trade: entry <b>'+t.entry+'</b> · stop <b>'+t.stop+'</b> · target <b>'+t.target+'</b> · reward:risk <b>'+t.rr+':1</b></div>';}
-    var lv='';
-    if(x.levels){lv='<div class="lv">Levels it\\'s watching: support <b>'+Number(x.levels.support).toFixed(2)+'</b> · resistance <b>'+Number(x.levels.resistance).toFixed(2)+'</b></div>';}
-    var why='<div class="lv">Verdict: '+(x.status=='candidate'?'<b class="pos">READY to trade</b>':x.status=='blocked'?'<b class="neg">standing aside</b> — '+(x.reason||''):'watching')+'</div>';
-    return '<div class="xr">'+head+rd+parts+bt+tr+lv+why+'</div>';
+function drawChart(cv,row){
+  var cs=row.candles;if(!cv||!cs||!cs.length)return;
+  var dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;var g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);
+  var lo=1e18,hi=-1e18;cs.forEach(function(c){if(c.l<lo)lo=c.l;if(c.h>hi)hi=c.h;});
+  if(row.plan){[row.plan.stop,row.plan.target,row.plan.entry].forEach(function(v){if(v<lo)lo=v;if(v>hi)hi=v;});}
+  if(row.levels){[row.levels.support,row.levels.resistance].forEach(function(v){if(v<lo)lo=v;if(v>hi)hi=v;});}
+  var pad=(hi-lo)*0.08||1;lo-=pad;hi+=pad;
+  var pL=4,pR=54,pT=6,pB=6,plotW=w-pL-pR,plotH=h-pT-pB,n=cs.length,cw=plotW/n;
+  function Y(p){return pT+(hi-p)/(hi-lo)*plotH;}
+  function X(i){return pL+i*cw+cw/2;}
+  function hline(p,col,dash,lab){g.strokeStyle=col;g.setLineDash(dash);g.lineWidth=1;g.beginPath();g.moveTo(pL,Y(p));g.lineTo(pL+plotW,Y(p));g.stroke();g.setLineDash([]);if(lab){g.fillStyle=col;g.font='9px ui-monospace';g.fillText(lab,pL+plotW+3,Y(p)+3);}}
+  if(row.levels){hline(row.levels.support,'#333844',[3,3],'S');hline(row.levels.resistance,'#333844',[3,3],'R');}
+  if(row.plan){hline(row.plan.target,'#1f7d50',[4,3],'TP');hline(row.plan.entry,'#7c828d',[2,2],'E');hline(row.plan.stop,'#7d2a32',[4,3],'SL');}
+  cs.forEach(function(c,i){var up=c.c>=c.o,col=up?'#24d17e':'#ff5266',x=X(i);
+    g.strokeStyle=col;g.lineWidth=1;g.beginPath();g.moveTo(x,Y(c.h));g.lineTo(x,Y(c.l));g.stroke();
+    var bw=Math.max(cw*0.62,1),yo=Y(c.o),yc=Y(c.c);g.fillStyle=col;g.fillRect(x-bw/2,Math.min(yo,yc),bw,Math.max(Math.abs(yc-yo),1));});
+  if(row.marker!=null&&cs[row.marker]){var mi=row.marker,mc=cs[mi],x=X(mi),bw=Math.max(cw*0.95,5);
+    g.strokeStyle='#ffd23f';g.lineWidth=1.5;g.setLineDash([]);g.strokeRect(x-bw/2,Y(mc.h)-3,bw,(Y(mc.l)+3)-(Y(mc.h)-3));
+    if(row.pattern){g.fillStyle='#ffd23f';g.font='bold 10px ui-monospace';var lab=(''+row.pattern).split(',')[0];g.fillText(lab,Math.max(2,Math.min(x-18,w-pR-56)),Math.max(11,Y(mc.h)-6));}}
+}
+function renderScan(rows){
+  var wrap=document.getElementById('scan');
+  var top=(rows||[]).filter(function(r){return r.candles&&r.candles.length;}).slice(0,6);
+  if(!top.length){wrap.innerHTML='<div class="empty">Scanning the candles for reversal patterns…</div>';return;}
+  wrap.innerHTML=top.map(function(r,i){
+    var dir=r.dir?'<span class="'+(r.dir=="LONG"?"long":"short")+'">'+r.dir+'</span>':'<span class="dim">no setup</span>';
+    var tag=r.status=='candidate'?'<span class="tag t-ready">ready</span>':r.status=='blocked'?'<span class="tag t-block">blocked</span>':'<span class="tag t-watch">watching</span>';
+    var pat=r.pattern?'<span class="pat">'+r.pattern+'</span>':'<span class="dim">'+(r.reason||'watching')+'</span>';
+    var bt='';if(r.backtest){var b=r.backtest;bt='<div class="row2">Backtest net of costs: <b>'+b.win_rate+'%</b> win · PF <b class="'+(b.pf>=1.15?'pos':'neg')+'">'+b.pf+'</b> · '+b.n+' trades'+(b.oos_n?' · OOS PF <b class="'+(b.oos_pf>=1?'pos':'neg')+'">'+b.oos_pf+'</b>':'')+'</div>';}
+    var pl='';if(r.plan){pl='<div class="row2">Plan: entry <b>'+r.plan.entry+'</b> · SL <b>'+r.plan.stop+'</b> · TP <b>'+r.plan.target+'</b> · R:R '+r.plan.rr+':1</div>';}
+    var why=(r.status=='blocked'&&r.backtest)?'<div class="row2">Standing aside: '+(r.reason||'')+'</div>':'';
+    return '<div class="sc'+(r.status=='candidate'?' ready':'')+'"><div class="sc-h"><span class="t">'+r.symbol+' · '+r.tf+' &nbsp;'+dir+'</span><span class="cf">'+tag+' &nbsp; '+(r.conf==null?'':r.conf+'%')+'</span></div>'
+      +'<canvas class="cv" id="cv'+i+'"></canvas>'
+      +'<div class="sc-b"><div>'+pat+'</div>'+bt+pl+why+'</div></div>';
   }).join('');
+  top.forEach(function(r,i){drawChart(document.getElementById('cv'+i),r);});
 }
 function fmtMoney(v){return v==null?'—':'$'+Number(v).toFixed(2);}
 function cls(v){return v>0?'pos':v<0?'neg':'dim';}
 function sign(v){return (v>0?'+':'')+Number(v).toFixed(2);}
-function tvSym(b){return 'BINANCE:'+b+'USDT';}
-function buildCharts(syms){
-  if(chartsBuilt||!window.TradingView||!syms.length)return;
-  var wrap=document.getElementById('charts');wrap.innerHTML='';
-  syms.forEach(function(b){
-    var id='tv_'+b;var d=document.createElement('div');d.className='chartbox';
-    d.innerHTML='<div class="chart-h">'+b+' · 1h</div><div id="'+id+'" class="tvc"></div>';
-    wrap.appendChild(d);
-    new TradingView.widget({container_id:id,symbol:tvSym(b),interval:'60',theme:'dark',style:'1',
-      locale:'en',autosize:true,hide_side_toolbar:true,allow_symbol_change:false,hide_top_toolbar:false});
-  });
-  chartsBuilt=true;
-}
 function render(data){
   var s=data.status;
   if(!s){return;}
@@ -822,14 +918,7 @@ function render(data){
   // scan grid
   var cl=document.getElementById('closest');
   cl.textContent=data.closest?('Closest setup: '+data.closest):(s.open_count?'Fully deployed ('+s.open_count+' open) — not scanning for more right now.':'Scanning…');
-  renderXray(data.analysis);
-  var g=document.getElementById('grid');var a=data.analysis||[];
-  if(!a.length){g.innerHTML='<div class="empty">No charts scored yet this cycle.</div>';}
-  else{var t='<table><tr><th>Market</th><th>TF</th><th>Score</th><th>Bias</th><th>Regime</th><th>Confidence</th><th>Status</th></tr>';
-    a.forEach(function(x){var st=x.status=='candidate'?'p-cand':x.status=='blocked'?'p-block':'p-watch';
-      var lbl=x.status=='candidate'?'READY':x.status=='blocked'?'blocked':'watching';
-      t+='<tr><td>'+x.symbol+'</td><td>'+x.tf+'</td><td class="'+cls(x.score)+'">'+(x.score>0?'+':'')+x.score+'</td><td class="'+(x.dir=="LONG"?"long":"short")+'">'+x.dir+'</td><td class="dim">'+(x.regime||'—')+'</td><td>'+(x.conf==null?'—':x.conf+'%')+'</td><td><span class="pill '+st+'">'+lbl+'</span> <span class="dim">'+(x.reason||'')+'</span></td></tr>';});
-    g.innerHTML=t+'</table>';}
+  renderScan(data.analysis);
   // recent trades
   var rc=document.getElementById('recent');var j=s.recent||[];
   if(!j.length){rc.innerHTML='<div class="empty">No closed trades yet.</div>';}
@@ -837,11 +926,8 @@ function render(data){
     j.forEach(function(e){rt+='<tr><td>'+(e.symbol||'').split('/')[0]+'</td><td>'+e.tf+'</td><td class="'+(e.dir>0?"long":"short")+'">'+(e.dir>0?'LONG':'SHORT')+'</td><td class="dim">'+e.result+'</td><td class="'+cls(e.r)+'">'+sign(e.r)+'R</td></tr>';});
     rc.innerHTML=rt+'</table>';}
   // config footer + charts
-  var costTxt=s.costs?(' · backtest costs: fee '+s.costs.fee.toFixed(2)+'%/side, slippage '+s.costs.slip.toFixed(2)+'%/side, funding '+s.costs.funding.toFixed(2)+'%/day'):'';
-  document.getElementById('cfgline').textContent='Trigger: '+s.trigger+' · confidence floor '+s.min_conf+'% · timeframes '+(s.timeframes||[]).join(', ')+' · risk '+s.risk_band[0]+'–'+s.risk_band[1]+'% (cap '+s.risk_band[2]+'%) · leverage '+Object.keys(s.lev_map||{}).map(function(k){return k+' '+s.lev_map[k]+'x';}).join(' / ')+costTxt;
-  var syms=[];(data.analysis||[]).forEach(function(x){if(syms.indexOf(x.symbol)<0)syms.push(x.symbol);});
-  if(!syms.length&&s.open)s.open.forEach(function(p){if(syms.indexOf(p.symbol)<0)syms.push(p.symbol);});
-  buildCharts(syms);
+  var costTxt=s.costs?(' · costs: fee '+s.costs.fee.toFixed(2)+'%/side, slippage '+s.costs.slip.toFixed(2)+'%/side, funding '+s.costs.funding.toFixed(2)+'%/day'):'';
+  document.getElementById('cfgline').textContent='Strategy: '+(s.strategy||'reversion')+' · confidence floor '+s.min_conf+'% · timeframes '+(s.timeframes||[]).join(', ')+' · risk '+s.risk_band[0]+'–'+s.risk_band[1]+'% (cap '+s.risk_band[2]+'%) · leverage '+Object.keys(s.lev_map||{}).map(function(k){return k+' '+s.lev_map[k]+'x';}).join(' / ')+costTxt;
 }
 function hit(url){return fetch(url).then(function(){setTimeout(poll,300);});}
 function togglePause(){hit(window._paused?'/api/resume':'/api/pause');}
@@ -1034,7 +1120,7 @@ def log_status(ex, state):
         "closed": len(closed), "win_rate": round(win_rate), "open_count": len(open_ps),
         "open": open_view,
         "recent": list(reversed(state["journal"][-12:])),
-        "trigger": CFG["TRIGGER"], "min_conf": CFG["MIN_CONFIDENCE"],
+        "trigger": CFG["TRIGGER"], "strategy": CFG["STRATEGY"], "min_conf": CFG["MIN_CONFIDENCE"],
         "timeframes": [t.strip() for t in CFG["TIMEFRAMES"]],
         "risk_band": [CFG["RISK_MIN_FRAC"] * 100, CFG["RISK_MAX_FRAC"] * 100, CFG["RISK_CAP_FRAC"] * 100],
         "lev_map": CFG["MAX_LEVERAGE_MAP"],
@@ -1047,20 +1133,15 @@ def scan_and_trade(ex, state, equity):
     if len(open_syms) >= CFG["MAX_CONCURRENT"]:
         return
     invested = sum(p.get("invested", 0) for p in state["positions"] if p["status"] == "open")
-    enter_th = CFG["ENTER_THRESHOLD"]
-    strong_th = CFG["STRONG_THRESHOLD"]
-    need = strong_th if CFG["TRIGGER"] == "strong" else enter_th
     candidates = []
-    near = []   # near-misses: (abs_score, "SYMBOL tf DIR — why it was blocked")
+    near = []   # near-misses: (strength, "SYMBOL tf DIR — why it was blocked")
     grid = []   # one row per chart scanned, for the live web view
     for symbol in ex.trade_symbols:
         if not symbol or symbol in open_syms:
             continue
-        # Pass 1: analyze EVERY timeframe for this symbol so we can score cross-
-        # timeframe alignment (the confidence term the old bot was missing).
-        tfs = {}
-        for tf in CFG["TIMEFRAMES"]:
-            tf = tf.strip()
+        for tf in [t.strip() for t in CFG["TIMEFRAMES"]]:
+            if tf == "1m":     # scan-only, never a primary trade
+                continue
             try:
                 candles = ex.candles(symbol, tf, 400)
             except Exception as e:
@@ -1068,37 +1149,30 @@ def scan_and_trade(ex, state, equity):
                 continue
             if len(candles) < 210:
                 continue
-            tfs[tf] = {"candles": candles, "an": analyze(candles)}
-        # Pass 2: evaluate each tradable timeframe as a candidate.
-        for tf, o in tfs.items():
-            if tf == "1m":     # scan-only, never a primary trade
-                continue
-            an = o["an"]; candles = o["candles"]
+            last = len(candles) - 1
+            sig, ind = signal_at(candles, last)
             base = symbol.split("/")[0]
-            d = 1 if an["score"] > 0 else -1
-            dirtxt = "LONG" if d > 0 else "SHORT"
-            row = {"symbol": base, "tf": tf, "score": an["score"], "dir": dirtxt,
-                   "regime": None, "conf": None, "status": "watching", "reason": ""}
-            read, levels = chart_readout(an, candles)
-            row["read"] = read
-            row["levels"] = {k: (round(v, 2) if isinstance(v, (int, float)) else v) for k, v in levels.items()}
+            # every scanned chart gets a row (with candle data so the page can draw it)
+            row = {"symbol": base, "tf": tf, "status": "watching", "reason": "",
+                   "dir": None, "pattern": None, "conf": None, "marker": None,
+                   "candles": _mini_candles(candles, 60), "levels": None, "plan": None,
+                   "backtest": None, "price": round(ind["price"], 2)}
             grid.append(row)
+            if not sig:
+                row["reason"] = ("no bullish/bearish reversal pattern at an extreme"
+                                 if CFG["STRATEGY"] == "reversion" else "no momentum signal")
+                continue
+            d = sig["dir"]; dirtxt = "LONG" if d > 0 else "SHORT"
+            row["dir"] = dirtxt
+            row["pattern"] = ", ".join(sig["patterns"]) or sig["ctx"]
+            row["marker"] = len(row["candles"]) - 1   # the signal is on the latest candle
+            row["levels"] = {"support": round(sig["support"], 2), "resistance": round(sig["resistance"], 2)}
+
             def blocked(reason):
                 row["status"] = "blocked"; row["reason"] = reason
-                near.append((abs(an["score"]), "%s %s %s — %s" % (base, tf, dirtxt, reason)))
-            if abs(an["score"]) < need:
-                blocked("score %+d, needs %s%d to trigger" % (an["score"], "±", int(need)))
-                continue
-            li = len(an["e20"]) - 1
-            trend_strength = (abs(an["e20"][li] - an["e50"][li]) / an["atr"]
-                              if (an["e20"][li] is not None and an["e50"][li] is not None and an["atr"] > 0) else 0)
-            regime = "trend" if trend_strength >= 1 else "mixed" if trend_strength >= 0.5 else "chop"
-            row["regime"] = regime
-            if regime == "chop" and abs(an["score"]) < strong_th:
-                blocked("chop regime, score %+d below STRONG" % an["score"]); continue
-            closes = [c["c"] for c in candles]
-            if signal_stability(closes, an["e20"]) >= 3:      # whipsaw gate
-                blocked("whipsaw (signal keeps flipping)"); continue
+                near.append((sig["strength"], "%s %s %s — %s" % (base, tf, dirtxt, reason)))
+
+            # PROVEN-EDGE gate: replay THIS strategy over history, net of costs + OOS
             bt = backtest(candles, TF_MIN.get(tf, 60))
             oos = bt.get("oos", {"n": 0, "avg_r": 0, "profit_factor": 0})
             row["backtest"] = {"n": bt["n"], "win_rate": round(bt["win_rate"]),
@@ -1106,55 +1180,42 @@ def scan_and_trade(ex, state, equity):
                                "gross_avg_r": round(bt.get("gross_avg_r", 0), 2),
                                "oos_n": oos["n"], "oos_pf": round(oos["profit_factor"], 2),
                                "oos_avg_r": round(oos["avg_r"], 2)}
-            if bt["n"] >= 6 and (bt["avg_r"] <= 0 or bt["profit_factor"] < 1.2):
-                blocked("edge too weak AFTER costs (PF %.2f, %+0.2fR over %d trades)"
-                        % (bt["profit_factor"], bt["avg_r"], bt["n"])); continue
-            if oos["n"] >= 6 and oos["avg_r"] <= 0:   # edge doesn't hold on unseen data
-                blocked("edge fails out-of-sample (recent PF %.2f over %d trades)"
-                        % (oos["profit_factor"], oos["n"])); continue
-            # timeframe alignment: how many OTHER timeframes of this symbol agree
-            agree = sum(1 for otf, oo in tfs.items()
-                        if otf != tf and abs(oo["an"]["score"]) >= enter_th
-                        and (1 if oo["an"]["score"] > 0 else -1) == d)
-            tv = tv_rating(candles)
-            tv_pts = clamp(tv["score"] * d * 12, -12, 12)
-            conf = confidence(an, bt, trend_strength, agree, tv_pts)
+            if bt["n"] >= 6 and (bt["avg_r"] <= 0 or bt["profit_factor"] < 1.15):
+                blocked("this pattern hasn't paid AFTER costs here (PF %.2f over %d)"
+                        % (bt["profit_factor"], bt["n"])); continue
+            if oos["n"] >= 6 and oos["avg_r"] <= 0:
+                blocked("pattern fails out-of-sample (recent PF %.2f)" % oos["profit_factor"]); continue
+
+            conf = (reversion_confidence(sig["strength"], sig["extremity"], bt)
+                    if CFG["STRATEGY"] == "reversion" else confidence(ind, bt, 0, 0, 0))
             row["conf"] = conf
-            # the confidence math, broken out, plus the trade it would place
-            hist_pts = 0
-            if bt["n"]:
-                shrink = bt["n"] / (bt["n"] + 10)
-                hist_pts = clamp(clamp(bt["avg_r"], -1, 1) * shrink * 30, -15, 15)
-            row["conf_parts"] = {"base": 25, "signal": round(min(abs(an["score"]), 70) * 0.35, 1),
-                                 "backtest": round(hist_pts, 1), "alignment": min(agree, 3) * 5,
-                                 "regime": round(clamp(trend_strength, 0, 1.5) * 8, 1), "tv": round(tv_pts, 1)}
-            row["agree"] = agree
-            stop = an["price"] - d * CFG["STOP_ATR"] * an["atr"]
-            tgt = an["price"] + d * CFG["TARGET_ATR"] * an["atr"]
-            row["trade"] = {"entry": round(an["price"], 2), "stop": round(stop, 2),
-                            "target": round(tgt, 2), "rr": round(CFG["TARGET_ATR"] / CFG["STOP_ATR"], 2)}
+            price = ind["price"]; atr = ind["atr"]
+            stop = price - d * CFG["STOP_ATR"] * atr
+            tgt = price + d * CFG["TARGET_ATR"] * atr
+            row["plan"] = {"entry": round(price, 2), "stop": round(stop, 2), "target": round(tgt, 2),
+                           "rr": round(CFG["TARGET_ATR"] / CFG["STOP_ATR"], 2)}
             if conf < CFG["MIN_CONFIDENCE"]:
                 blocked("confidence %d%%, needs %d%%" % (conf, int(CFG["MIN_CONFIDENCE"]))); continue
             if in_cooldown(state["journal"], symbol, TF_MIN.get(tf, 60)):
                 blocked("cooldown after a recent trade"); continue
             row["status"] = "candidate"
-            candidates.append({"symbol": symbol, "tf": tf, "dir": d, "score": an["score"],
-                               "conf": conf, "an": an, "regime": regime, "agree": agree,
-                               "tv": tv["score"]})
-    # publish what the scan saw for the live web page
-    grid.sort(key=lambda r: (r["conf"] if r["conf"] is not None else -1, abs(r["score"])), reverse=True)
+            candidates.append({"symbol": symbol, "tf": tf, "dir": d,
+                               "score": d * int(sig["strength"] * 100), "conf": conf, "an": ind,
+                               "regime": sig["ctx"], "pattern": row["pattern"]})
+    grid.sort(key=lambda r: (r["conf"] if r["conf"] is not None else -1), reverse=True)
     LATEST["analysis"] = grid
     LATEST["scan_ts"] = time.time()
-    LATEST["closest"] = (sorted(near, reverse=True)[0][1] if near else None)
+    LATEST["closest"] = (sorted(near, key=lambda x: x[0], reverse=True)[0][1] if near else None)
     if not candidates:
         if near:
-            near.sort(reverse=True)
-            log.info("No trade this scan. Closest setup: %s", near[0][1])
+            log.info("No trade this scan. Closest: %s", sorted(near, key=lambda x: x[0], reverse=True)[0][1])
         else:
-            log.info("No trade this scan — no signal on any chart yet (all inside the neutral band).")
+            log.info("No trade this scan — no reversal pattern at a tradeable extreme yet.")
         return
     candidates.sort(key=lambda c: c["conf"], reverse=True)
     best = candidates[0]
+    log.info("PATTERN FOUND: %s %s %s (%s) conf=%d%% — placing trade",
+             "LONG" if best["dir"] > 0 else "SHORT", best["symbol"], best["tf"], best["pattern"], best["conf"])
     open_trade(ex, state, best, equity, invested)
 
 def open_trade(ex, state, d, equity, invested):

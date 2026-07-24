@@ -145,6 +145,26 @@ By default the bot sizes **exactly like the dashboard's AI account** — not a f
   drawdown and only exits on a strong reversal — higher variance, can lose more per trade.
 - `DAILY_LOSS_LIMIT` — daily drawdown kill-switch.
 
+## The strategy: pattern reversion (buy dips / sell spikes)
+
+The default `STRATEGY=reversion` does **not** chase momentum. It waits for a genuine
+**candlestick reversal pattern** — hammer, bullish/bearish engulfing, tweezer — and
+only acts when the market is at an **extreme**:
+
+- **Long** a *bullish* reversal pattern only when **oversold / stretched down** (RSI low,
+  below the lower Bollinger band, or well under EMA20).
+- **Short** a *bearish* reversal pattern only when **overbought / stretched up**.
+
+Crucially, the *pattern is required*: a big red candle that just keeps dropping with no
+rejection produces **no** bullish pattern, so the bot won't try to "catch a falling
+knife." Every candidate still has to clear the cost-adjusted, out-of-sample backtest
+below before it trades. Set `STRATEGY=momentum` to run the old trend-following engine
+(kept for A/B comparison).
+
+The monitor's **Pattern scan** panel draws each chart as candlesticks, highlights the
+detected pattern candle in bat-yellow, and overlays the support/resistance and
+entry/stop/target lines — so you watch it react to the candles in real time.
+
 ## How the profitability check works (and why to trust it more now)
 
 Before any trade, the bot **replays its own strategy over that chart's history** and

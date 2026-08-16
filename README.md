@@ -3,6 +3,10 @@
 A self-contained crypto analysis dashboard for **Bitcoin, Ethereum, Solana and Hyperliquid (HYPE)**.
 One file, zero dependencies — open `index.html` in any browser.
 
+> Looking for the 1-minute liquidity-sweep scalper? That is a **separate, self-contained
+> dashboard** in [`sweep/`](sweep/) with its own README — different pattern, different
+> timeframe, its own settings, no shared code.
+
 ## What it does
 
 - **Live market data only** with automatic failover: Binance → OKX → Hyperliquid's
@@ -94,7 +98,18 @@ One file, zero dependencies — open `index.html` in any browser.
 
 ## Usage
 
-Open `index.html` directly, serve it statically, or enable GitHub Pages on this repo.
+```sh
+./serve.sh            # http://localhost:8765/
+./serve.sh 9000       # or pick your own port
+```
+
+Prefer this over double-clicking the file. Opened as `file://` the page has a null
+origin, and some browsers will then block the exchange API calls the live feed needs.
+
+Alternatively, enable GitHub Pages on this repo — the workflow in
+`.github/workflows/deploy-pages.yml` publishes on every push to `main`, giving each
+dashboard a URL you can open from a phone.
+
 Pick a timeframe, set your capital and risk per trade, and click an asset card.
 
 ## Disclaimer

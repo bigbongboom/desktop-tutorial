@@ -1,0 +1,1572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ETH Sweep Desk — 1m liquidity sweeps</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;   /* levels — blue */
+    --series-7: #4a3aa7;   /* TSI — violet */
+    --candle-up: #1baf7a;
+    --candle-dn: #e34948;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+    --chip: #f0efec;
+    --wash-good: rgba(12,163,12,0.10);
+    --wash-critical: rgba(208,59,59,0.10);
+    --wash-accent: rgba(42,120,214,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-7: #9085e9;
+      --candle-up: #199e70;
+      --candle-dn: #e66767;
+      --chip: #262624;
+      --wash-good: rgba(12,163,12,0.16);
+      --wash-critical: rgba(208,59,59,0.16);
+      --wash-accent: rgba(57,135,229,0.14);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --series-7: #9085e9;
+    --candle-up: #199e70;
+    --candle-dn: #e66767;
+    --chip: #262624;
+    --wash-good: rgba(12,163,12,0.16);
+    --wash-critical: rgba(208,59,59,0.16);
+    --wash-accent: rgba(57,135,229,0.14);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 0 0 64px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 0 20px; }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline;
+    justify-content: space-between;
+    padding: 20px 0 14px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 18px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .chip {
+    display: inline-block; background: var(--chip); color: var(--text-secondary);
+    border-radius: 5px; padding: 2px 7px; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.02em; white-space: nowrap;
+  }
+  .livebox { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .live-price { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .live-chg { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--text-muted); font-size: 12px; }
+  .sec { color: var(--text-secondary); }
+
+  /* ---------- filter row ---------- */
+  .filterbar {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: flex-end;
+    padding: 0 0 16px; margin-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--text-muted); font-weight: 600; letter-spacing: 0.02em; }
+  .field input, .field select {
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 8px; font: inherit; font-size: 13px;
+    font-variant-numeric: tabular-nums; width: 92px;
+  }
+  .field input:focus, .field select:focus { outline: 2px solid var(--series-1); outline-offset: 1px; }
+  .field.wide input, .field.wide select { width: 116px; }
+  .btn {
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .btn:hover { background: var(--chip); }
+  .btn:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
+
+  /* ---------- cards ---------- */
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 20px; margin-bottom: 18px;
+  }
+  .card h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
+    color: var(--text-secondary); margin-bottom: 4px;
+  }
+  .card .sub { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+
+  .hero-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- verdict ---------- */
+  .verdict-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .verdict-word { font-size: 15px; font-weight: 700; letter-spacing: 0.04em; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    border-radius: 5px; padding: 3px 8px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+  .badge.good { background: var(--wash-good); color: var(--good); }
+  .badge.bad { background: var(--wash-critical); color: var(--critical); }
+  .badge.wait { background: var(--chip); color: var(--text-secondary); }
+  .hero-figure {
+    font-size: 48px; line-height: 1.05; font-weight: 600; letter-spacing: -0.02em;
+    margin: 2px 0 2px;
+  }
+  .hero-cap { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
+
+  .plan { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 4px; }
+  @media (max-width: 560px) { .plan { grid-template-columns: repeat(2, 1fr); } }
+  .plan .k { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+  .plan .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .meter-wrap { margin-top: 16px; }
+  .meter-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+  .meter { height: 6px; border-radius: 3px; background: var(--wash-accent); overflow: hidden; }
+  .meter > i { display: block; height: 100%; border-radius: 3px; background: var(--series-1); }
+
+  .why { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .why ul { list-style: none; display: grid; gap: 5px; }
+  .why li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--text-secondary); }
+  .why .tick { font-weight: 700; width: 13px; flex: none; }
+  .why .yes { color: var(--good); }
+  .why .no { color: var(--text-muted); }
+
+  /* ---------- leverage card ---------- */
+  .lev-rows { display: grid; gap: 0; }
+  .lev-row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  .lev-row:last-child { border-bottom: 0; }
+  .lev-row .k { color: var(--text-secondary); }
+  .lev-row .v { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  .lev-note {
+    margin-top: 12px; padding: 10px 12px; border-radius: 7px;
+    background: var(--chip); font-size: 12px; color: var(--text-secondary);
+  }
+
+  /* ---------- stat tiles ---------- */
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; margin-bottom: 18px; }
+  @media (max-width: 1100px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 700px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .k { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+  .tile .v { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; margin-top: 3px; }
+  .tile .d { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  /* ---------- charts ---------- */
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 10px; }
+  .chart-box { position: relative; width: 100%; }
+  svg.chart { display: block; width: 100%; height: auto; touch-action: pan-y; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .key-line { width: 14px; height: 2px; border-radius: 1px; flex: none; }
+  .key-box { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+
+  .tip {
+    position: absolute; pointer-events: none; z-index: 5;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 7px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 150px;
+    opacity: 0; transition: opacity .1s;
+  }
+  .tip.on { opacity: 1; }
+  .tip .t { color: var(--text-muted); font-size: 11px; margin-bottom: 5px; }
+  .tip .r { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; }
+  .tip .r b { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tip .r span { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 5px; }
+
+  /* ---------- tables ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  th { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .tbl-scroll { overflow-x: auto; }
+  .pill { display: inline-block; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 700; }
+  .pill.win { background: var(--wash-good); color: var(--good); }
+  .pill.loss { background: var(--wash-critical); color: var(--critical); }
+  .pill.open { background: var(--chip); color: var(--text-secondary); }
+  .pill.liq { background: var(--wash-critical); color: var(--critical); }
+
+  .loading main { opacity: .55; }
+  main { transition: opacity .15s; }
+
+  .offline {
+    background: var(--wash-critical); border: 1px solid var(--critical);
+    color: var(--critical); border-radius: 8px; padding: 10px 14px;
+    font-size: 13px; font-weight: 500; margin-bottom: 18px;
+  }
+  .hidden { display: none !important; }
+  footer { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
+  footer p + p { margin-top: 7px; }
+  .vis-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <div class="brand">
+      <h1>ETH Sweep Desk</h1>
+      <span class="chip">1&nbsp;MIN</span>
+      <span class="chip">LIQUIDITY SWEEP</span>
+    </div>
+    <div class="livebox">
+      <span class="live-price" id="live-price">—</span>
+      <span class="live-chg" id="live-chg"></span>
+      <span class="muted" id="src-badge">connecting…</span>
+      <button class="btn" id="theme-btn" type="button">Theme</button>
+    </div>
+  </header>
+
+  <div class="filterbar" id="filters">
+    <div class="field"><label for="f-lev">Leverage ×</label><input id="f-lev" type="number" min="1" max="1000" step="25"></div>
+    <div class="field"><label for="f-cap">Margin $</label><input id="f-cap" type="number" min="1" step="10"></div>
+    <div class="field"><label for="f-fee">Taker fee %</label><input id="f-fee" type="number" min="0" step="0.005"></div>
+    <div class="field"><label for="f-mmr">Maint. margin %</label><input id="f-mmr" type="number" min="0" step="0.005"></div>
+    <div class="field"><label for="f-tsil">TSI long</label><input id="f-tsil" type="number" min="2" max="60" step="1"></div>
+    <div class="field"><label for="f-tsis">TSI short</label><input id="f-tsis" type="number" min="2" max="40" step="1"></div>
+    <div class="field wide"><label for="f-band">TSI band (0 = auto)</label><input id="f-band" type="number" min="0" max="1" step="0.05"></div>
+    <div class="field wide"><label for="f-stopbuf">Stop buffer ×ATR</label><input id="f-stopbuf" type="number" min="0" max="6" step="0.1"></div>
+    <div class="field wide"><label for="f-strict">Strictness</label>
+      <select id="f-strict">
+        <option value="loose">Loose — more signals</option>
+        <option value="normal">Normal</option>
+        <option value="strict">Strict — best only</option>
+      </select>
+    </div>
+    <div class="field wide"><label for="f-bars">Chart window</label>
+      <select id="f-bars">
+        <option value="120">120 bars</option>
+        <option value="180">180 bars</option>
+        <option value="300">300 bars</option>
+      </select>
+    </div>
+    <button class="btn" id="reset-btn" type="button">Reset</button>
+  </div>
+
+  <div class="offline hidden" id="offline">Live feed unreachable — showing last real prices, marked stale. Scanning is paused until it reconnects. No prices on this page are ever simulated.</div>
+
+  <main id="main">
+
+    <section class="hero-grid">
+      <article class="card" id="verdict-card">
+        <div class="verdict-head">
+          <span class="verdict-word" id="verdict-word">SCANNING…</span>
+          <span class="badge wait" id="verdict-badge">—</span>
+        </div>
+        <div class="hero-figure" id="hero-entry">—</div>
+        <div class="hero-cap" id="hero-cap">Waiting for the first live candles.</div>
+
+        <div class="plan">
+          <div><div class="k">Entry</div><div class="v" id="p-entry">—</div></div>
+          <div><div class="k">Stop</div><div class="v" id="p-stop">—</div></div>
+          <div><div class="k">Target</div><div class="v" id="p-target">—</div></div>
+          <div><div class="k">Reward : risk</div><div class="v" id="p-rr">—</div></div>
+        </div>
+
+        <div class="meter-wrap">
+          <div class="meter-label"><span>Setup confidence</span><span id="conf-val">—</span></div>
+          <div class="meter"><i id="conf-bar" style="width:0%"></i></div>
+        </div>
+
+        <div class="why">
+          <ul id="why-list"><li class="sec">Loading candles…</li></ul>
+        </div>
+      </article>
+
+      <article class="card" id="lev-card">
+        <h2>500× reality check</h2>
+        <p class="sub" id="lev-sub">Sizing is fixed at your chosen leverage — no auto-adjustment. Liquidation is shown as information.</p>
+        <div class="lev-rows" id="lev-rows"></div>
+        <div class="lev-note" id="lev-note">Waiting for a setup.</div>
+      </article>
+    </section>
+
+    <section class="stats" id="stats"></section>
+
+    <section class="card">
+      <div class="chart-head">
+        <div>
+          <h2>Price · levels · sweeps</h2>
+          <p class="sub" id="chart-sub">Blue lines are auto-detected levels. Triangles mark completed sweeps.</p>
+        </div>
+      </div>
+      <div class="chart-box" id="price-box">
+        <svg class="chart" id="price-svg" role="img" aria-label="ETH 1-minute candles with detected liquidity levels and sweep markers"></svg>
+        <div class="tip" id="price-tip" role="status" aria-live="polite"></div>
+      </div>
+      <div class="legend">
+        <span><i class="key-box" style="background:var(--candle-up)"></i>Up candle</span>
+        <span><i class="key-box" style="background:var(--candle-dn)"></i>Down candle</span>
+        <span><i class="key-line" style="background:var(--series-1)"></i>Liquidity level</span>
+        <span><i class="key-box" style="background:var(--good)"></i>Long sweep</span>
+        <span><i class="key-box" style="background:var(--critical)"></i>Short sweep</span>
+        <span><i class="key-box" style="background:var(--wash-good);border:1px solid var(--good)"></i>Target zone</span>
+        <span><i class="key-box" style="background:var(--wash-critical);border:1px solid var(--critical)"></i>Stop zone</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="chart-head">
+        <div>
+          <h2>TSI <span id="tsi-title-n">25/13</span></h2>
+          <p class="sub">Scaled −1…+1 to match your TradingView pane. Bands mark the extremes a reversal is taken from.</p>
+        </div>
+        <div class="muted" id="tsi-now">—</div>
+      </div>
+      <div class="chart-box" id="tsi-box">
+        <svg class="chart" id="tsi-svg" role="img" aria-label="True Strength Index on the same 1-minute bars"></svg>
+        <div class="tip" id="tsi-tip" role="status" aria-live="polite"></div>
+      </div>
+      <div class="legend">
+        <span><i class="key-line" style="background:var(--series-7)"></i>TSI</span>
+        <span><i class="key-line" style="background:var(--axis)"></i>Extreme bands</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="chart-head">
+        <div>
+          <h2>Every sweep in this window</h2>
+          <p class="sub" id="log-sub">Replayed bar by bar with no lookahead — levels are rebuilt from the data available at each bar, entries fill on the signal close, and the stop is counted before the target on any bar that touches both.</p>
+        </div>
+      </div>
+      <div class="tbl-scroll">
+        <table id="log-table">
+          <thead><tr>
+            <th>Time (UTC)</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th>
+            <th>R:R</th><th>Conf</th><th>Worst move</th><th>Result</th><th>At 500×</th>
+          </tr></thead>
+          <tbody id="log-body"><tr><td colspan="10" class="sec">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="chart-head">
+        <div>
+          <h2>Bar data</h2>
+          <p class="sub">The table twin of both charts — every value above is readable here without hovering.</p>
+        </div>
+        <button class="btn" id="tbl-btn" type="button" aria-expanded="false">Show table</button>
+      </div>
+      <div class="tbl-scroll hidden" id="bar-tbl-wrap">
+        <table>
+          <thead><tr><th>Time (UTC)</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th><th>TSI</th><th>Signal</th></tr></thead>
+          <tbody id="bar-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p><strong>How the pattern is defined here.</strong> A level is a price with two or more pivot touches (horizontal) or a line fitted through consecutive pivots (sloped channel). A sweep is a bar whose wick pierces that level and whose close returns inside it within three bars, with a volume thrust and a wick that dominates its body. TSI must be at its extreme band and turning back. Entry is the reclaim close, the stop sits beyond the sweep wick, and the target is the opposite side of the range with a 1:1 floor.</p>
+      <p><strong>On leverage.</strong> Sizing is locked to your leverage setting and never adjusted down — that is a deliberate choice you made. The liquidation price, the distance to it, and whether your stop sits beyond it are shown on every setup as information. At 500× your margin is 0.2% of notional, so a 0.15% adverse move is most of it.</p>
+      <p><strong>Not financial advice.</strong> This is a pattern detector on live public price data. Detected setups are tendencies, not predictions, and the replay statistics are a small sample of recent bars — not an edge you can bank on. Never risk money you cannot afford to lose.</p>
+    </footer>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   Config
+   ============================================================ */
+const CFG_KEY = "ethsweep_cfg_v2";
+const DEFAULTS = {
+  lev: 500, capital: 100,
+  feePct: 0.02,      // taker, % of notional per side
+  mmrPct: 0.04,      // maintenance margin, % of notional
+  tsiLong: 25, tsiShort: 13,
+  tsiBand: 0,        // 0 = auto-calibrate to recent extremes; > 0 pins it
+  stopBuf: 0.6,      // stop is placed this many ATR beyond the sweep wick
+  strict: "normal", bars: 180,
+};
+let cfg = load();
+function load() {
+  try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(CFG_KEY) || "{}")); }
+  catch (_) { return Object.assign({}, DEFAULTS); }
+}
+function save() { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (_) {} }
+
+/* Thresholds are set from the measured distribution of real 1m ETH sweeps, not
+   guessed. tsiPctl is a percentile of recent |TSI| rather than an absolute level,
+   because the scale of TSI depends entirely on its lengths and on volatility —
+   a fixed band that suits one setting can be unreachable on another. */
+const STRICTNESS = {
+  loose:  { volMult: 0.90, wickRatio: 0.30, minTouches: 2, minConf: 32, tsiPctl: 0.72 },
+  normal: { volMult: 1.15, wickRatio: 0.42, minTouches: 2, minConf: 46, tsiPctl: 0.84 },
+  strict: { volMult: 1.50, wickRatio: 0.55, minTouches: 3, minConf: 62, tsiPctl: 0.92 },
+};
+
+const CANDLE_LIMIT = 1000;   // ~16.6 h of 1m bars
+const REFRESH_MS = 15000;
+const PIVOT_K = 3;           // bars either side to confirm a pivot
+const MAX_HOLD = 60;         // bars a replayed trade is given before it is called flat
+const SWEEP_WINDOW = 3;      // bars allowed between the pierce and the reclaim
+
+/* ============================================================
+   Formatting
+   ============================================================ */
+const fmtP = v => isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
+const fmtUsd = v => (v < 0 ? "−$" : "$") + fmtP(Math.abs(v));
+const fmtPct = (v, dp = 2) => isFinite(v) ? (v >= 0 ? "" : "−") + Math.abs(v).toFixed(dp) + "%" : "—";
+const fmtSigned = (v, dp = 2) => isFinite(v) ? (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(dp) : "—";
+function fmtClock(ms) {
+  const d = new Date(ms);
+  return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
+}
+
+/* ============================================================
+   Data layer — Binance → OKX → Hyperliquid. Never simulated.
+   ============================================================ */
+async function fetchJson(url, opts = {}, timeoutMs = 6000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, Object.assign({}, opts, { signal: ctl.signal }));
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return await res.json();
+  } finally { clearTimeout(t); }
+}
+/* Coinbase leads the chain on purpose: it is the book these setups are read on,
+   and at 500× the venue basis is not a rounding error. ETH-USD on Coinbase ran
+   about 1.7 points away from ETH-USDT elsewhere while this was being built —
+   roughly 0.09%, which is most of a whole stop. Trade the book you scan. */
+async function fromCoinbase() {
+  const rows = await fetchJson("https://api.exchange.coinbase.com/products/ETH-USD/candles?granularity=60");
+  if (!Array.isArray(rows) || rows.length < 120) throw new Error("thin");
+  return rows
+    .map(r => ({ t: r[0] * 1000, l: +r[1], h: +r[2], o: +r[3], c: +r[4], v: +r[5] }))
+    .sort((a, b) => a.t - b.t);
+}
+async function fromBinance() {
+  const rows = await fetchJson(`https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1m&limit=${CANDLE_LIMIT}`);
+  if (!Array.isArray(rows) || rows.length < 120) throw new Error("thin");
+  return rows.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+}
+async function fromOkx() {
+  const j = await fetchJson("https://www.okx.com/api/v5/market/candles?instId=ETH-USDT&bar=1m&limit=300");
+  if (!j || !Array.isArray(j.data) || j.data.length < 120) throw new Error("thin");
+  return j.data.map(r => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] })).reverse();
+}
+async function fromHyperliquid() {
+  const end = Date.now(), start = end - CANDLE_LIMIT * 60000;
+  const j = await fetchJson("https://api.hyperliquid.xyz/info", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "candleSnapshot", req: { coin: "ETH", interval: "1m", startTime: start, endTime: end } }),
+  });
+  if (!Array.isArray(j) || j.length < 120) throw new Error("thin");
+  return j.map(r => ({ t: +r.t, o: +r.o, h: +r.h, l: +r.l, c: +r.c, v: +r.v }));
+}
+const SOURCES = [["Coinbase", fromCoinbase], ["Binance", fromBinance], ["OKX", fromOkx], ["Hyperliquid", fromHyperliquid]];
+const fails = new Map();
+const failCount = n => fails.get(n) || 0;
+
+let store = { candles: null, source: null, at: 0, stale: false };
+
+async function refresh() {
+  const chain = SOURCES.slice().sort((a, b) => Math.min(failCount(a[0]), 3) - Math.min(failCount(b[0]), 3));
+  for (const [name, fn] of chain) {
+    try {
+      const candles = await fn();
+      fails.set(name, 0);
+      store = { candles, source: name, at: Date.now(), stale: false };
+      return true;
+    } catch (_) { fails.set(name, failCount(name) + 1); }
+  }
+  if (store.candles) store.stale = true;
+  return false;
+}
+
+/* ============================================================
+   Indicators
+   ============================================================ */
+function emaArr(vals, period) {
+  const out = new Array(vals.length).fill(null);
+  if (!vals.length) return out;
+  const k = 2 / (period + 1);
+  let prev = vals[0];
+  out[0] = prev;
+  for (let i = 1; i < vals.length; i++) {
+    const v = vals[i] == null ? prev : vals[i];
+    prev = v * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+/* True Strength Index on the −1…+1 scale (the standard value ÷ 100). */
+function tsiArr(closes, longP, shortP) {
+  const n = closes.length;
+  const m = new Array(n).fill(0), am = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) { m[i] = closes[i] - closes[i - 1]; am[i] = Math.abs(m[i]); }
+  const e2 = emaArr(emaArr(m, longP), shortP);
+  const a2 = emaArr(emaArr(am, longP), shortP);
+  const out = new Array(n).fill(null);
+  const warm = longP + shortP;
+  for (let i = warm; i < n; i++) out[i] = a2[i] ? Math.max(-1, Math.min(1, e2[i] / a2[i])) : 0;
+  return out;
+}
+function atrArr(candles, period = 14) {
+  const n = candles.length, tr = new Array(n).fill(null), out = new Array(n).fill(null);
+  for (let i = 1; i < n; i++) {
+    const c = candles[i], p = candles[i - 1].c;
+    tr[i] = Math.max(c.h - c.l, Math.abs(c.h - p), Math.abs(c.l - p));
+  }
+  let sum = 0;
+  for (let i = 1; i < n; i++) {
+    if (i <= period) { sum += tr[i]; if (i === period) out[i] = sum / period; }
+    else out[i] = (out[i - 1] * (period - 1) + tr[i]) / period;
+  }
+  return out;
+}
+function smaArr(vals, period) {
+  const out = new Array(vals.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < vals.length; i++) {
+    sum += vals[i];
+    if (i >= period) sum -= vals[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
+}
+function computeIndicators(candles) {
+  return {
+    tsi: tsiArr(candles.map(c => c.c), cfg.tsiLong, cfg.tsiShort),
+    atr: atrArr(candles, 14),
+    vol: smaArr(candles.map(c => c.v), 20),
+    _band: new Map(),
+  };
+}
+
+/* The extreme band, as you drew it by hand: one steady line near the edge of
+   where TSI actually reaches. Set cfg.tsiBand > 0 to pin it instead.
+
+   Measured over an EXPANDING window (everything known up to bar i, never later),
+   so the replayed history is honest. A trailing window was tried first and is
+   wrong for this job: through a quiet stretch it collapsed to ±0.15, which is
+   ordinary noise rather than an extreme, and the detector fired on nothing.
+   The floor stops that happening. Recomputed on a coarse grid — the band should
+   drift slowly, and it keeps a full replay cheap. */
+const BAND_FLOOR = 0.25, BAND_REGRID = 30;
+function resolvedBand(ind, i, S) {
+  if (cfg.tsiBand > 0) return cfg.tsiBand;
+  const key = Math.floor(i / BAND_REGRID) + ":" + S.tsiPctl;
+  if (ind._band && ind._band.has(key)) return ind._band.get(key);
+  const arr = [];
+  for (let j = 0; j <= i; j++) {
+    const t = ind.tsi[j];
+    if (t != null) arr.push(Math.abs(t));
+  }
+  let band = null;
+  if (arr.length >= 60) {
+    arr.sort((a, b) => a - b);
+    band = Math.max(BAND_FLOOR, arr[Math.min(arr.length - 1, Math.floor(arr.length * S.tsiPctl))]);
+  }
+  if (ind._band) ind._band.set(key, band);
+  return band;
+}
+
+/* ============================================================
+   Levels — the blue lines, found automatically
+   ============================================================ */
+/* A pivot is only *known* k bars after it prints, so every pivot carries the
+   index at which it became visible. Replay filters on that, never on `i`. */
+function findPivots(candles, k = PIVOT_K) {
+  const highs = [], lows = [];
+  for (let i = k; i < candles.length - k; i++) {
+    let isH = true, isL = true;
+    for (let j = 1; j <= k; j++) {
+      if (candles[i].h < candles[i - j].h || candles[i].h < candles[i + j].h) isH = false;
+      if (candles[i].l > candles[i - j].l || candles[i].l > candles[i + j].l) isL = false;
+      if (!isH && !isL) break;
+    }
+    if (isH) highs.push({ i, p: candles[i].h, conf: i + k });
+    if (isL) lows.push({ i, p: candles[i].l, conf: i + k });
+  }
+  return { highs, lows };
+}
+
+/* Horizontal levels: cluster pivots that sit within `tol` of each other.
+   Sloped levels: least-squares fit through the last few pivots when they
+   march consistently in one direction (the descending-channel case). */
+function buildLevels(pivots, upTo, tol, minTouches, maxLevels = 8) {
+  const out = [];
+  for (const [kind, list] of [["res", pivots.highs], ["sup", pivots.lows]]) {
+    const seen = list.filter(p => p.conf <= upTo);
+    if (!seen.length) continue;
+
+    // --- horizontal clusters ---
+    const used = new Array(seen.length).fill(false);
+    for (let a = 0; a < seen.length; a++) {
+      if (used[a]) continue;
+      const members = [seen[a]];
+      used[a] = true;
+      for (let b = a + 1; b < seen.length; b++) {
+        if (used[b]) continue;
+        const avg = members.reduce((s, m) => s + m.p, 0) / members.length;
+        if (Math.abs(seen[b].p - avg) <= tol) { members.push(seen[b]); used[b] = true; }
+      }
+      if (members.length >= minTouches) {
+        out.push({
+          kind, sloped: false,
+          price: members.reduce((s, m) => s + m.p, 0) / members.length,
+          touches: members.length,
+          firstIdx: members[0].i,
+          lastIdx: members[members.length - 1].i,
+        });
+      }
+    }
+
+    // --- one sloped fit per side, over the most recent pivots ---
+    const recent = seen.slice(-4);
+    if (recent.length >= 3) {
+      const n = recent.length;
+      const mx = recent.reduce((s, p) => s + p.i, 0) / n;
+      const my = recent.reduce((s, p) => s + p.p, 0) / n;
+      let num = 0, den = 0;
+      for (const p of recent) { num += (p.i - mx) * (p.p - my); den += (p.i - mx) ** 2; }
+      if (den > 0) {
+        const slope = num / den, intercept = my - slope * mx;
+        // keep it only if every pivot sits close to the fitted line
+        const err = Math.max(...recent.map(p => Math.abs(p.p - (slope * p.i + intercept))));
+        /* A steep fit is a fluke of three pivots, not a channel: extended even a
+           few bars it leaves the chart entirely. Cap the slope at roughly one ATR
+           per six bars and let the horizontal levels carry the rest. */
+        const maxSlope = (tol / 1.6) / 6;
+        if (err <= tol && Math.abs(slope) > 1e-9 && Math.abs(slope) <= maxSlope) {
+          out.push({
+            kind, sloped: true, slope, intercept,
+            price: slope * upTo + intercept,
+            touches: recent.length,
+            firstIdx: recent[0].i, lastIdx: recent[n - 1].i,
+          });
+        }
+      }
+    }
+  }
+
+  /* Without this the detector finds thirty near-duplicate micro-levels where a
+     chartist draws two or three, and then "sweeps" of noise swamp the real ones.
+     Keep the best-attested levels and drop anything sitting on top of one already
+     kept, so what is left is the small set of lines a trader would actually draw. */
+  out.sort((a, b) => (b.touches - a.touches) || (b.lastIdx - a.lastIdx));
+  const kept = [];
+  for (const lv of out) {
+    const p = levelAt(lv, upTo);
+    if (!isFinite(p)) continue;
+    /* ATR on 1m ETH can fall under a tenth of a point, and a tolerance derived
+       from it alone leaves levels stacked a quarter-point apart — visually one
+       fat line, and three separate "sweeps" of what is really one level. The
+       relative floor keeps them a readable distance apart. */
+    const sep = Math.max(tol * 0.75, p * 0.0005);
+    if (kept.some(k => Math.abs(levelAt(k, upTo) - p) < sep)) continue;
+    kept.push(lv);
+    if (kept.length >= maxLevels) break;
+  }
+  return kept;
+}
+const levelAt = (lv, i) => lv.sloped ? lv.slope * i + lv.intercept : lv.price;
+/* A fitted channel line only means anything near the pivots that made it. */
+function levelUsableAt(lv, i) {
+  if (!lv.sloped) return true;
+  return i <= lv.lastIdx + Math.max(20, (lv.lastIdx - lv.firstIdx) * 0.5);
+}
+
+/* ============================================================
+   Sweep detection
+   ============================================================ */
+/* Looks only at candles[0..i]. Returns the best setup at bar i, or null. */
+function detectAt(candles, ind, i, levels, S) {
+  const atr = ind.atr[i], tsi = ind.tsi[i], volAvg = ind.vol[i];
+  if (!atr || tsi == null || !volAvg) return null;
+  const bar = candles[i];
+  const tsiPrev = ind.tsi[i - 1];
+  if (tsiPrev == null) return null;
+
+  const band = resolvedBand(ind, i, S);
+  if (band == null) return null;
+  let best = null;
+
+  for (const lv of levels) {
+    if (!levelUsableAt(lv, i)) continue;
+    for (const dir of ["long", "short"]) {
+      // A long comes off a swept support; a short off a swept resistance.
+      if (dir === "long" && lv.kind !== "sup") continue;
+      if (dir === "short" && lv.kind !== "res") continue;
+
+      // --- 1. the pierce, within the last SWEEP_WINDOW bars ---
+      let sweepIdx = -1, extreme = dir === "long" ? Infinity : -Infinity;
+      for (let j = Math.max(1, i - SWEEP_WINDOW + 1); j <= i; j++) {
+        const lp = levelAt(lv, j);
+        if (dir === "long" && candles[j].l < lp) {
+          if (candles[j].l < extreme) { extreme = candles[j].l; sweepIdx = j; }
+        } else if (dir === "short" && candles[j].h > lp) {
+          if (candles[j].h > extreme) { extreme = candles[j].h; sweepIdx = j; }
+        }
+      }
+      if (sweepIdx < 0) continue;
+
+      // --- 2. the reclaim: this bar closed back inside ---
+      const lpNow = levelAt(lv, i);
+      if (dir === "long" && bar.c <= lpNow) continue;
+      if (dir === "short" && bar.c >= lpNow) continue;
+
+      // --- 3. the pierce has to be a sweep, not a breakout ---
+      const depth = dir === "long" ? lpNow - extreme : extreme - lpNow;
+      if (depth < atr * 0.08 || depth > atr * 2.5) continue;
+
+      /* --- 4. wick dominance across the WHOLE sweep, not one bar ---
+         A sweep that takes three bars puts its low on a bar that closes at its
+         low — that bar has no wick at all. What a trader actually sees is the
+         shape of the sweep as a group, so collapse the window into one synthetic
+         candle (open of the first bar, close of the reclaim, extremes of the run)
+         and measure the rejection on that. */
+      let wh = -Infinity, wl = Infinity;
+      for (let j = sweepIdx; j <= i; j++) { wh = Math.max(wh, candles[j].h); wl = Math.min(wl, candles[j].l); }
+      const synth = { o: candles[sweepIdx].o, c: bar.c, h: wh, l: wl };
+      const range = synth.h - synth.l;
+      if (range <= 0) continue;
+      const wick = dir === "long"
+        ? Math.min(synth.o, synth.c) - synth.l
+        : synth.h - Math.max(synth.o, synth.c);
+      const wickRatio = wick / range;
+      if (wickRatio < S.wickRatio) continue;
+
+      // --- 5. volume thrust — the heaviest bar of the sweep, same reason ---
+      let volPeak = 0;
+      for (let j = sweepIdx; j <= i; j++) volPeak = Math.max(volPeak, candles[j].v);
+      const volRatio = volPeak / volAvg;
+      if (volRatio < S.volMult) continue;
+
+      // --- 6. TSI at its extreme and turning back ---
+      let tsiExt = dir === "long" ? Infinity : -Infinity;
+      for (let j = Math.max(0, i - SWEEP_WINDOW); j <= i; j++) {
+        const t = ind.tsi[j];
+        if (t == null) continue;
+        tsiExt = dir === "long" ? Math.min(tsiExt, t) : Math.max(tsiExt, t);
+      }
+      if (dir === "long" && !(tsiExt <= -band && tsi > tsiPrev)) continue;
+      if (dir === "short" && !(tsiExt >= band && tsi < tsiPrev)) continue;
+
+      // --- the plan ---
+      const entry = bar.c;
+      const buffer = Math.max(atr * cfg.stopBuf, entry * 0.00012);
+      const stop = dir === "long" ? extreme - buffer : extreme + buffer;
+      const risk = Math.abs(entry - stop);
+      if (risk <= 0) continue;
+
+      /* A stop tighter than one-minute noise is not a stop, it is a coin flip
+         that pays the spread. Anything under this is rejected outright. */
+      if (risk < Math.max(atr * 0.8, entry * 0.0003)) continue;
+
+      // Target: the opposite side of the range, floored at 1:1.
+      const opposite = levels
+        .filter(o => o.kind === (dir === "long" ? "res" : "sup"))
+        .map(o => levelAt(o, i))
+        .filter(p => dir === "long" ? p > entry + risk * 0.35 : p < entry - risk * 0.35)
+        .sort((a, b) => dir === "long" ? a - b : b - a)[0];
+      const floor = dir === "long" ? entry + risk : entry - risk;
+      let target = floor;
+      if (opposite != null) {
+        target = dir === "long" ? Math.max(opposite, floor) : Math.min(opposite, floor);
+      }
+      const reward = Math.abs(target - entry);
+      const rr = reward / risk;
+
+      /* At 500× the round trip costs 0.04% of the position — on ETH near $1,880
+         that is about 0.75 of a point. A target smaller than a few multiples of
+         that is a losing trade even when it wins, so it never gets shown. */
+      const feeCost = entry * (cfg.feePct / 100) * 2;
+      if (reward < feeCost * 2.5) continue;
+
+      // --- confidence ---
+      /* Every component is scored scale-free, so the confidence number means the
+         same thing whatever TSI lengths or volatility regime you are in. */
+      const parts = [
+        { k: "Level held " + lv.touches + " times before", w: 20, s: (lv.touches - 1) / 3 },
+        { k: "Sweep is a wick through, not a break (" + (depth / atr).toFixed(2) + "×ATR)", w: 16, s: 1 - Math.abs(depth / atr - 0.5) / 1.3 },
+        { k: "Rejection dominates the sweep (" + Math.round(wickRatio * 100) + "% of its range)", w: 18, s: (wickRatio - 0.25) / 0.5 },
+        { k: "Volume thrust ×" + volRatio.toFixed(2) + " vs 20-bar average", w: 16, s: (volRatio - 0.85) / 1.4 },
+        { k: "TSI hit " + tsiExt.toFixed(2) + " (band ±" + band.toFixed(2) + ") and turned", w: 20, s: (Math.abs(tsiExt) - band) / (band * 0.6) },
+        { k: "Room to the opposite side (" + rr.toFixed(2) + ":1)", w: 10, s: (rr - 0.8) / 1.4 },
+      ];
+      let conf = 0;
+      for (const p of parts) { p.s = Math.max(0, Math.min(1, p.s)); conf += p.w * p.s; }
+      conf = Math.round(conf);
+
+      const sig = {
+        i, dir, level: lv, levelPrice: lpNow, sweepIdx, extreme, depth, wickRatio, volRatio,
+        tsiExt, band, entry, stop, target, risk, reward, rr, conf, parts, t: bar.t,
+      };
+      if (!best || sig.conf > best.conf) best = sig;
+    }
+  }
+  return best && best.conf >= S.minConf ? best : null;
+}
+
+/* ============================================================
+   Leverage math — isolated margin, fees charged both sides
+   ============================================================ */
+function leverage(sig) {
+  const lev = Math.max(1, cfg.lev);
+  const f = cfg.feePct / 100;
+  const mmr = cfg.mmrPct / 100;
+  const margin = Math.max(0, cfg.capital);
+  const notional = margin * lev;
+  const qty = sig ? notional / sig.entry : 0;
+
+  // Liquidation: equity falls to the maintenance requirement, entry fee already paid.
+  const liqFrac = 1 / lev - mmr - f;
+  const liqDist = sig ? sig.entry * liqFrac : 0;
+  const liqPrice = sig ? (sig.dir === "long" ? sig.entry - liqDist : sig.entry + liqDist) : null;
+
+  const riskFrac = sig ? sig.risk / sig.entry : 0;
+  const rewardFrac = sig ? sig.reward / sig.entry : 0;
+
+  const feeRT = notional * f * 2;
+  const feePctMargin = margin ? (feeRT / margin) * 100 : 0;
+  const lossAtStop = qty * (sig ? sig.risk : 0);
+  const winAtTarget = qty * (sig ? sig.reward : 0);
+  const netWin = winAtTarget - feeRT;
+  const netLoss = lossAtStop + feeRT;
+
+  // Does the stop sit inside liquidation, and by how much?
+  const stopVsLiq = liqDist > 0 ? riskFrac * sig.entry / liqDist : Infinity;
+  const survives = liqFrac > 0 && sig ? (sig.risk < liqDist) : false;
+
+  // The leverage at which this exact stop would clear liquidation with a 30% buffer.
+  const maxSafeLev = riskFrac > 0 ? Math.floor(1 / (riskFrac / 0.7 + mmr + f)) : null;
+
+  return {
+    lev, margin, notional, qty, liqFrac, liqDist, liqPrice, riskFrac, rewardFrac,
+    feeRT, feePctMargin, lossAtStop, winAtTarget, netWin, netLoss,
+    stopVsLiq, survives, maxSafeLev,
+    breakevenMove: sig ? sig.entry * f * 2 : 0,
+  };
+}
+
+/* ============================================================
+   Replay — every sweep in the loaded window, no lookahead
+   ============================================================ */
+function replay(candles, ind, S) {
+  const pivots = findPivots(candles);
+  const out = [];
+  let cooldownUntil = -1;
+  const start = Math.max(cfg.tsiLong + cfg.tsiShort + 5, 40);
+
+  for (let i = start; i < candles.length; i++) {
+    if (i <= cooldownUntil) continue;
+    const atr = ind.atr[i];
+    if (!atr) continue;
+    const levels = buildLevels(pivots, i, atr * 1.6, S.minTouches);
+    if (!levels.length) continue;
+    const sig = detectAt(candles, ind, i, levels, S);
+    if (!sig) continue;
+
+    // Walk forward: stop is checked before target on any bar touching both.
+    let result = "open", exitIdx = null, worst = 0;
+    for (let j = i + 1; j < Math.min(candles.length, i + 1 + MAX_HOLD); j++) {
+      const b = candles[j];
+      const adverse = sig.dir === "long" ? sig.entry - b.l : b.h - sig.entry;
+      if (adverse > worst) worst = adverse;
+      const hitStop = sig.dir === "long" ? b.l <= sig.stop : b.h >= sig.stop;
+      const hitTgt = sig.dir === "long" ? b.h >= sig.target : b.l <= sig.target;
+      if (hitStop) { result = "loss"; exitIdx = j; break; }
+      if (hitTgt) { result = "win"; exitIdx = j; break; }
+    }
+    if (result === "open" && i + MAX_HOLD < candles.length) result = "flat";
+
+    sig.result = result;
+    sig.exitIdx = exitIdx;
+    sig.worstAdverse = worst;
+    out.push(sig);
+    cooldownUntil = i + 8;
+  }
+  return out;
+}
+
+function replayStats(signals) {
+  const closed = signals.filter(s => s.result === "win" || s.result === "loss");
+  const wins = closed.filter(s => s.result === "win").length;
+  const lv = leverage(null);
+  const liqFrac = lv.liqFrac;
+  let liquidated = 0;
+  for (const s of signals) {
+    if (s.result === "open") continue;
+    if (liqFrac > 0 && s.worstAdverse >= s.entry * liqFrac) liquidated++;
+  }
+  const rated = signals.filter(s => s.result === "win" || s.result === "loss");
+  const avgR = rated.length
+    ? rated.reduce((sum, s) => sum + (s.result === "win" ? s.rr : -1), 0) / rated.length
+    : null;
+
+  /* What the window would actually have paid: every signal taken at the configured
+     margin and leverage, fees charged both ways, a liquidation capped at the whole
+     margin. This is the number that decides whether the setup is worth trading at
+     all, and it is the one an R-multiple quietly hides. */
+  let net = 0;
+  for (const s of signals) {
+    if (s.result !== "win" && s.result !== "loss") continue;
+    const L = leverage(s);
+    if (L.liqFrac > 0 && s.worstAdverse >= s.entry * L.liqFrac) { net -= L.margin; continue; }
+    net += s.result === "win" ? L.netWin : -L.netLoss;
+  }
+
+  return {
+    total: signals.length,
+    closed: closed.length,
+    winRate: closed.length ? (wins / closed.length) * 100 : null,
+    avgR,
+    liquidated,
+    liqPct: signals.length ? (liquidated / signals.length) * 100 : 0,
+    net,
+    margin: leverage(null).margin,
+  };
+}
+
+/* ============================================================
+   Rendering
+   ============================================================ */
+const $ = id => document.getElementById(id);
+const SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+
+const PRICE_H = 430, TSI_H = 190, PAD_L = 8, PAD_R = 72, PAD_T = 14, PAD_B = 26;
+
+/* Axis ticks land on round numbers, so the reader gets 1,880.00 rather than
+   1,879.36 — the values you didn't directly label have to be readable. */
+function niceTicks(lo, hi, count) {
+  const raw = (hi - lo) / count;
+  if (!isFinite(raw) || raw <= 0) return [lo];
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) out.push(v);
+  return out;
+}
+let view = null;   // shared geometry so the two panes stay aligned
+
+function renderPrice(candles, ind, live, signals) {
+  const svg = $("price-svg");
+  const W = svg.clientWidth || 1000;
+  clear(svg);
+  svg.setAttribute("viewBox", `0 0 ${W} ${PRICE_H}`);
+
+  const n = Math.min(cfg.bars, candles.length);
+  const slice = candles.slice(-n);
+  const base = candles.length - n;
+
+  const lvInfo = live ? leverage(live) : null;
+  let lo = Infinity, hi = -Infinity;
+  for (const c of slice) { lo = Math.min(lo, c.l); hi = Math.max(hi, c.h); }
+  if (live) {
+    lo = Math.min(lo, live.stop, live.target);
+    hi = Math.max(hi, live.stop, live.target);
+    // keep liquidation on screen — it is the one line that must never be cropped
+    if (lvInfo && lvInfo.liqPrice != null && isFinite(lvInfo.liqPrice)) {
+      lo = Math.min(lo, lvInfo.liqPrice);
+      hi = Math.max(hi, lvInfo.liqPrice);
+    }
+  }
+  const padY = (hi - lo) * 0.08 || 1;
+  lo -= padY; hi += padY;
+
+  const plotW = W - PAD_L - PAD_R, plotH = PRICE_H - PAD_T - PAD_B;
+  /* Reserve empty slots to the right of the newest bar when a trade is live, the
+     way a charting package does. The alternative — widening the zone leftwards —
+     paints the position box over candles that printed before the entry, which
+     reads as if the trade had been open all along. */
+  const slots = n + (live ? Math.round(n * 0.22) : 0);
+  const bw = plotW / slots;
+  const x = k => PAD_L + (k + 0.5) * bw;
+  const y = p => PAD_T + (hi - p) / (hi - lo) * plotH;
+  view = { W, n, slots, base, x, y, bw, plotW, plotH, lo, hi, slice };
+
+  // grid + right-hand price axis, on round numbers rather than raw fractions
+  for (const p of niceTicks(lo, hi, 6)) {
+    const yy = y(p);
+    svg.appendChild(svgEl("line", { x1: PAD_L, y1: yy, x2: PAD_L + plotW, y2: yy, stroke: "var(--grid)", "stroke-width": 1 }));
+    const lb = svgEl("text", { x: PAD_L + plotW + 7, y: yy + 3.5, fill: "var(--text-muted)", "font-size": 11 });
+    lb.textContent = fmtP(p);
+    svg.appendChild(lb);
+  }
+  // time axis
+  const step = Math.max(1, Math.floor(n / 7));
+  for (let k = 0; k < n; k += step) {
+    const lb = svgEl("text", { x: x(k), y: PRICE_H - 8, fill: "var(--text-muted)", "font-size": 11, "text-anchor": "middle" });
+    lb.textContent = fmtClock(slice[k].t);
+    svg.appendChild(lb);
+  }
+
+  // --- trade zones (drawn under the candles) ---
+  if (live) {
+    const entryY = y(live.entry), tgtY = y(live.target), stopY = y(live.stop);
+    const zx = x(Math.max(0, live.i - base)) + bw * 0.5;
+    const zw = Math.max(20, PAD_L + plotW - zx);
+    svg.appendChild(svgEl("rect", {
+      x: zx, y: Math.min(entryY, tgtY), width: zw, height: Math.abs(tgtY - entryY),
+      fill: "var(--wash-good)",
+    }));
+    svg.appendChild(svgEl("rect", {
+      x: zx, y: Math.min(entryY, stopY), width: zw, height: Math.abs(stopY - entryY),
+      fill: "var(--wash-critical)",
+    }));
+    for (const [py, col, txt] of [
+      [tgtY, "var(--good)", "TP " + fmtP(live.target)],
+      [entryY, "var(--text-secondary)", "Entry " + fmtP(live.entry)],
+      [stopY, "var(--critical)", "SL " + fmtP(live.stop)],
+    ]) {
+      svg.appendChild(svgEl("line", { x1: zx, y1: py, x2: PAD_L + plotW, y2: py, stroke: col, "stroke-width": 2 }));
+      const lb = svgEl("text", { x: zx + 5, y: py - 5, fill: "var(--text-secondary)", "font-size": 11, "font-weight": 600 });
+      lb.textContent = txt;
+      svg.appendChild(lb);
+    }
+    // liquidation: a genuine threshold, so it reads as a dashed rule
+    const lv = leverage(live);
+    if (lv.liqPrice != null && lv.liqPrice > lo && lv.liqPrice < hi) {
+      const ly = y(lv.liqPrice);
+      svg.appendChild(svgEl("line", {
+        x1: PAD_L, y1: ly, x2: PAD_L + plotW, y2: ly,
+        stroke: "var(--critical)", "stroke-width": 2, "stroke-dasharray": "5 4",
+      }));
+      const lb = svgEl("text", { x: PAD_L + 5, y: ly - 5, fill: "var(--critical)", "font-size": 11, "font-weight": 700 });
+      lb.textContent = "LIQ " + fmtP(lv.liqPrice) + " @ " + lv.lev + "×";
+      svg.appendChild(lb);
+    }
+  }
+
+  // --- levels ---
+  const atrNow = ind.atr[candles.length - 1] || 1;
+  const pivots = findPivots(candles);
+  const levels = buildLevels(pivots, candles.length - 1, atrNow * 1.6, STRICTNESS[cfg.strict].minTouches)
+    .filter(l => {
+      const p = levelAt(l, candles.length - 1);
+      return p > lo && p < hi;
+    })
+    .sort((a, b) => b.touches - a.touches);
+
+  for (const lv of levels) {
+    const from = Math.max(0, lv.firstIdx - base);
+    const x1 = x(from), x2 = PAD_L + plotW;
+    if (lv.sloped) {
+      // stop the line where it stops meaning anything, rather than flying off-scale
+      const endIdx = Math.min(candles.length - 1,
+        lv.lastIdx + Math.max(20, (lv.lastIdx - lv.firstIdx) * 0.5));
+      const xe = Math.min(x2, x(Math.max(0, endIdx - base)));
+      const y1 = y(levelAt(lv, lv.firstIdx)), y2 = y(levelAt(lv, endIdx));
+      svg.appendChild(svgEl("line", { x1, y1, x2: xe, y2, stroke: "var(--series-1)", "stroke-width": 2, "stroke-linecap": "round" }));
+    } else {
+      const yy = y(lv.price);
+      svg.appendChild(svgEl("line", { x1, y1: yy, x2, y2: yy, stroke: "var(--series-1)", "stroke-width": 2, "stroke-linecap": "round" }));
+    }
+  }
+
+  // --- candles ---
+  const bodyW = Math.max(1, Math.min(24, bw * 0.62));
+  for (let k = 0; k < n; k++) {
+    const c = slice[k], up = c.c >= c.o;
+    const col = up ? "var(--candle-up)" : "var(--candle-dn)";
+    svg.appendChild(svgEl("line", { x1: x(k), y1: y(c.h), x2: x(k), y2: y(c.l), stroke: col, "stroke-width": 1 }));
+    const top = y(Math.max(c.o, c.c)), bot = y(Math.min(c.o, c.c));
+    svg.appendChild(svgEl("rect", {
+      x: x(k) - bodyW / 2, y: top, width: bodyW, height: Math.max(1, bot - top), fill: col,
+    }));
+  }
+
+  // --- sweep markers ---
+  for (const s of signals) {
+    const k = s.i - base;
+    if (k < 0 || k >= n) continue;
+    const isLong = s.dir === "long";
+    const px = x(k);
+    const py = isLong ? y(s.extreme) + 11 : y(s.extreme) - 11;
+    const col = isLong ? "var(--good)" : "var(--critical)";
+    const d = isLong
+      ? `M ${px} ${py - 8} L ${px - 5.5} ${py + 3} L ${px + 5.5} ${py + 3} Z`
+      : `M ${px} ${py + 8} L ${px - 5.5} ${py - 3} L ${px + 5.5} ${py - 3} Z`;
+    svg.appendChild(svgEl("path", { d, fill: col, stroke: "var(--surface-1)", "stroke-width": 2, "stroke-linejoin": "round" }));
+  }
+
+  // last price marker with a surface ring
+  const lastC = slice[n - 1];
+  svg.appendChild(svgEl("circle", {
+    cx: x(n - 1), cy: y(lastC.c), r: 4,
+    fill: lastC.c >= lastC.o ? "var(--candle-up)" : "var(--candle-dn)",
+    stroke: "var(--surface-1)", "stroke-width": 2,
+  }));
+
+  attachCrosshair(svg, $("price-box"), $("price-tip"), candles, ind, PRICE_H, "price");
+}
+
+function renderTsi(candles, ind, band) {
+  const svg = $("tsi-svg");
+  const W = svg.clientWidth || 1000;
+  clear(svg);
+  svg.setAttribute("viewBox", `0 0 ${W} ${TSI_H}`);
+  if (!view) return;
+
+  const { n, base, slice } = view;
+  const plotW = W - PAD_L - PAD_R, plotH = TSI_H - PAD_T - PAD_B;
+  const bw = plotW / view.slots;
+  const x = k => PAD_L + (k + 0.5) * bw;
+  const y = v => PAD_T + (1 - v) / 2 * plotH;
+
+  for (const v of [1, 0.5, 0, -0.5, -1]) {
+    const yy = y(v);
+    svg.appendChild(svgEl("line", { x1: PAD_L, y1: yy, x2: PAD_L + plotW, y2: yy, stroke: "var(--grid)", "stroke-width": 1 }));
+    const lb = svgEl("text", { x: PAD_L + plotW + 7, y: yy + 3.5, fill: "var(--text-muted)", "font-size": 11 });
+    lb.textContent = v.toFixed(2);
+    svg.appendChild(lb);
+  }
+  // the extreme bands, labelled so the resolved value is never hidden
+  if (band) {
+    for (const v of [band, -band]) {
+      svg.appendChild(svgEl("line", {
+        x1: PAD_L, y1: y(v), x2: PAD_L + plotW, y2: y(v),
+        stroke: "var(--axis)", "stroke-width": 2,
+      }));
+    }
+    const lb = svgEl("text", { x: PAD_L + 5, y: y(band) - 5, fill: "var(--text-muted)", "font-size": 11, "font-weight": 600 });
+    lb.textContent = "band ±" + band.toFixed(2) + (cfg.tsiBand > 0 ? " (pinned)" : " (auto)");
+    svg.appendChild(lb);
+  }
+
+  let d = "";
+  for (let k = 0; k < n; k++) {
+    const t = ind.tsi[base + k];
+    if (t == null) continue;
+    d += (d ? " L " : "M ") + x(k) + " " + y(t);
+  }
+  if (d) svg.appendChild(svgEl("path", {
+    d, fill: "none", stroke: "var(--series-7)", "stroke-width": 2,
+    "stroke-linejoin": "round", "stroke-linecap": "round",
+  }));
+
+  const lastT = ind.tsi[candles.length - 1];
+  if (lastT != null) {
+    svg.appendChild(svgEl("circle", {
+      cx: x(n - 1), cy: y(lastT), r: 4, fill: "var(--series-7)",
+      stroke: "var(--surface-1)", "stroke-width": 2,
+    }));
+  }
+  attachCrosshair(svg, $("tsi-box"), $("tsi-tip"), candles, ind, TSI_H, "tsi");
+}
+
+/* One crosshair behaviour for both panes: snap to the nearest bar, show every
+   value at that X, and mirror it on keyboard focus. */
+function attachCrosshair(svg, box, tip, candles, ind, H, which) {
+  const W = svg.viewBox.baseVal.width || svg.clientWidth;
+  const hair = svgEl("line", { y1: PAD_T, y2: H - PAD_B, stroke: "var(--axis)", "stroke-width": 1, opacity: 0 });
+  svg.appendChild(hair);
+  const rect = svgEl("rect", { x: 0, y: 0, width: W, height: H, fill: "transparent", tabindex: 0 });
+  svg.appendChild(rect);
+
+  let k = -1;
+  function show(clientX) {
+    if (!view) return;
+    const r = svg.getBoundingClientRect();
+    const rel = (clientX - r.left) / r.width * W;
+    k = Math.max(0, Math.min(view.n - 1, Math.round((rel - PAD_L) / view.bw - 0.5)));
+    paint();
+  }
+  function paint() {
+    if (k < 0 || !view) return;
+    const idx = view.base + k;
+    const c = candles[idx];
+    if (!c) return;
+    const px = PAD_L + (k + 0.5) * ((W - PAD_L - PAD_R) / view.n);
+    hair.setAttribute("x1", px); hair.setAttribute("x2", px); hair.setAttribute("opacity", 1);
+
+    clear(tip);
+    const head = document.createElement("div");
+    head.className = "t";
+    head.textContent = fmtClock(c.t) + " UTC";
+    tip.appendChild(head);
+    const rows = which === "price"
+      ? [["Open", fmtP(c.o)], ["High", fmtP(c.h)], ["Low", fmtP(c.l)], ["Close", fmtP(c.c)],
+         ["Volume", c.v.toFixed(2)], ["TSI", ind.tsi[idx] != null ? ind.tsi[idx].toFixed(3) : "—"]]
+      : [["TSI", ind.tsi[idx] != null ? ind.tsi[idx].toFixed(3) : "—"], ["Close", fmtP(c.c)]];
+    for (const [label, val] of rows) {
+      const row = document.createElement("div");
+      row.className = "r";
+      const s = document.createElement("span");
+      s.textContent = label;
+      const b = document.createElement("b");
+      b.textContent = val;
+      row.appendChild(s); row.appendChild(b);
+      tip.appendChild(row);
+    }
+    tip.classList.add("on");
+    const bx = box.getBoundingClientRect();
+    const left = px / W * bx.width;
+    tip.style.left = Math.min(bx.width - 175, Math.max(0, left + 14)) + "px";
+    tip.style.top = "14px";
+  }
+  function hide() { hair.setAttribute("opacity", 0); tip.classList.remove("on"); }
+
+  rect.addEventListener("pointermove", e => show(e.clientX));
+  rect.addEventListener("pointerleave", hide);
+  rect.addEventListener("blur", hide);
+  rect.addEventListener("focus", () => { if (k < 0) k = view ? view.n - 1 : 0; paint(); });
+  rect.addEventListener("keydown", e => {
+    if (e.key === "ArrowLeft") { k = Math.max(0, k - 1); paint(); e.preventDefault(); }
+    if (e.key === "ArrowRight") { k = Math.min(view.n - 1, k + 1); paint(); e.preventDefault(); }
+  });
+}
+
+/* ---------- verdict + leverage panels ---------- */
+function renderVerdict(sig, candles, ind) {
+  const word = $("verdict-word"), badge = $("verdict-badge");
+  const price = candles[candles.length - 1].c;
+
+  if (!sig) {
+    word.textContent = "NO SETUP";
+    badge.className = "badge wait";
+    badge.textContent = "WAIT";
+    $("hero-entry").textContent = fmtP(price);
+    $("hero-cap").textContent = "Last price. No sweep has completed on the current bar — the pattern needs a pierce, a reclaim and TSI at its band.";
+    for (const id of ["p-entry", "p-stop", "p-target", "p-rr"]) $(id).textContent = "—";
+    $("conf-val").textContent = "—";
+    $("conf-bar").style.width = "0%";
+    const ul = $("why-list");
+    clear(ul);
+    const li = document.createElement("li");
+    li.className = "sec";
+    li.textContent = "Nothing qualifies right now. Loosen strictness to see marginal setups, or wait for price to reach a level.";
+    ul.appendChild(li);
+    return;
+  }
+
+  const isLong = sig.dir === "long";
+  word.textContent = isLong ? "LONG NOW" : "SHORT NOW";
+  badge.className = "badge " + (isLong ? "good" : "bad");
+  badge.textContent = isLong ? "▲ SWEPT SUPPORT" : "▼ SWEPT RESISTANCE";
+  $("hero-entry").textContent = fmtP(sig.entry);
+  $("hero-cap").textContent =
+    (isLong ? "Long entry — " : "Short entry — ") +
+    "price swept the " + fmtP(sig.levelPrice) + " level to " + fmtP(sig.extreme) +
+    " and closed back inside. Detected " + fmtClock(sig.t) + " UTC.";
+
+  $("p-entry").textContent = fmtP(sig.entry);
+  $("p-stop").textContent = fmtP(sig.stop);
+  $("p-target").textContent = fmtP(sig.target);
+  $("p-rr").textContent = sig.rr.toFixed(2) + " : 1";
+  $("conf-val").textContent = sig.conf + " / 100";
+  $("conf-bar").style.width = sig.conf + "%";
+
+  const ul = $("why-list");
+  clear(ul);
+  for (const p of sig.parts) {
+    const li = document.createElement("li");
+    const t = document.createElement("span");
+    t.className = "tick " + (p.s >= 0.55 ? "yes" : "no");
+    t.textContent = p.s >= 0.55 ? "✓" : "·";
+    const txt = document.createElement("span");
+    txt.textContent = p.k;
+    li.appendChild(t); li.appendChild(txt);
+    ul.appendChild(li);
+  }
+}
+
+function renderLeverage(sig) {
+  const box = $("lev-rows"), note = $("lev-note");
+  clear(box);
+  const lv = leverage(sig);
+
+  const rows = sig ? [
+    ["Position size", fmtUsd(lv.notional) + "  (" + lv.qty.toFixed(3) + " ETH)"],
+    ["Margin at risk", fmtUsd(lv.margin)],
+    ["Liquidation price", lv.liqFrac > 0 ? fmtP(lv.liqPrice) : "immediate"],
+    ["Distance to liquidation", lv.liqFrac > 0 ? fmtP(lv.liqDist) + "  (" + fmtPct(lv.liqFrac * 100, 3) + ")" : "—"],
+    ["Your stop distance", fmtP(sig.risk) + "  (" + fmtPct(lv.riskFrac * 100, 3) + ")"],
+    ["Stop sits at", lv.liqFrac > 0 ? Math.round(lv.stopVsLiq * 100) + "% of the way to liquidation" : "—"],
+    ["Loss if stopped", "−" + fmtUsd(lv.lossAtStop) + "  (" + Math.round(lv.lossAtStop / lv.margin * 100) + "% of margin)"],
+    ["Round-trip fees", "−" + fmtUsd(lv.feeRT) + "  (" + Math.round(lv.feePctMargin) + "% of margin)"],
+    ["Breakeven move", fmtP(lv.breakevenMove) + " just to cover fees"],
+    ["Net if target hits", (lv.netWin >= 0 ? "+" : "−") + fmtUsd(Math.abs(lv.netWin)) + "  (" + fmtSigned(lv.netWin / lv.margin * 100, 0) + "% of margin)"],
+    ["Net if stopped", "−" + fmtUsd(lv.netLoss) + "  (" + fmtSigned(-lv.netLoss / lv.margin * 100, 0) + "% of margin)"],
+  ] : [
+    ["Leverage", lv.lev + "×"],
+    ["Margin", fmtUsd(lv.margin)],
+    ["Position size", fmtUsd(lv.notional)],
+    ["Liquidation distance", lv.liqFrac > 0 ? fmtPct(lv.liqFrac * 100, 3) + " of entry" : "immediate — fees exceed margin"],
+    ["Round-trip fees", Math.round((lv.feeRT / lv.margin) * 100) + "% of margin"],
+  ];
+
+  for (const [k, v] of rows) {
+    const r = document.createElement("div");
+    r.className = "lev-row";
+    const a = document.createElement("span"); a.className = "k"; a.textContent = k;
+    const b = document.createElement("span"); b.className = "v"; b.textContent = v;
+    r.appendChild(a); r.appendChild(b);
+    box.appendChild(r);
+  }
+
+  if (!sig) {
+    note.textContent = "At " + lv.lev + "×, your margin is " + (100 / lv.lev).toFixed(2) +
+      "% of position size — an adverse move of " + fmtPct(lv.liqFrac * 100, 3) + " liquidates it.";
+    return;
+  }
+  if (lv.liqFrac <= 0) {
+    note.textContent = "At " + lv.lev + "× your fees and maintenance margin exceed the initial margin — this position cannot be opened on these terms.";
+    return;
+  }
+  if (!lv.survives) {
+    note.textContent = "Your stop at " + fmtP(sig.stop) + " sits BEYOND liquidation (" + fmtP(lv.liqPrice) +
+      "). At " + lv.lev + "× this position is liquidated before the stop is ever reached — the stop cannot protect it. " +
+      "The same stop clears liquidation with a 30% buffer at about " + lv.maxSafeLev + "×. Sizing is unchanged, as you asked.";
+  } else {
+    note.textContent = "Stop clears liquidation with " + Math.round((1 - lv.stopVsLiq) * 100) +
+      "% room to spare at " + lv.lev + "×. This exact stop holds a 30% buffer up to about " + lv.maxSafeLev + "×.";
+  }
+}
+
+function renderStats(stats) {
+  const box = $("stats");
+  clear(box);
+  const lv = leverage(null);
+  const small = stats.closed > 0 && stats.closed < 20;
+  const tiles = [
+    { k: "Sweeps in window", v: String(stats.total), d: "over the last " + (store.candles ? store.candles.length : 0) + " one-minute bars" },
+    { k: "Hit rate", v: stats.winRate == null ? "—" : Math.round(stats.winRate) + "%", d: stats.closed + " resolved" + (small ? " — too few to mean anything" : "") },
+    { k: "Average R", v: stats.avgR == null ? "—" : fmtSigned(stats.avgR, 2), d: "per resolved setup, before fees" },
+    { k: "Would liquidate at " + lv.lev + "×", v: stats.total ? Math.round(stats.liqPct) + "%" : "—", d: stats.liquidated + " of " + stats.total + " moved past liquidation first" },
+    { k: "Net at " + lv.lev + "× on " + fmtUsd(stats.margin), v: stats.closed ? (stats.net >= 0 ? "+" : "−") + fmtUsd(Math.abs(stats.net)) : "—", d: "every signal taken, fees paid, liquidations capped at the margin" },
+  ];
+  for (const t of tiles) {
+    const el = document.createElement("div");
+    el.className = "tile";
+    const k = document.createElement("div"); k.className = "k"; k.textContent = t.k;
+    const v = document.createElement("div"); v.className = "v"; v.textContent = t.v;
+    const d = document.createElement("div"); d.className = "d"; d.textContent = t.d;
+    el.appendChild(k); el.appendChild(v); el.appendChild(d);
+    box.appendChild(el);
+  }
+}
+
+function renderLog(signals) {
+  const body = $("log-body");
+  clear(body);
+  const lv = leverage(null);
+  if (!signals.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 10; td.className = "sec";
+    td.textContent = "No sweeps matched in this window. Try a looser strictness setting.";
+    tr.appendChild(td); body.appendChild(tr);
+    return;
+  }
+  for (const s of signals.slice().reverse()) {
+    const tr = document.createElement("tr");
+    const liq = lv.liqFrac > 0 && s.worstAdverse >= s.entry * lv.liqFrac;
+    const cells = [
+      fmtClock(s.t),
+      s.dir === "long" ? "Long" : "Short",
+      fmtP(s.entry), fmtP(s.stop), fmtP(s.target),
+      s.rr.toFixed(2), String(s.conf),
+      "−" + fmtP(s.worstAdverse),
+      null, null,
+    ];
+    cells.forEach((c, idx) => {
+      const td = document.createElement("td");
+      if (idx === 8) {
+        const p = document.createElement("span");
+        p.className = "pill " + (s.result === "win" ? "win" : s.result === "loss" ? "loss" : "open");
+        p.textContent = s.result === "win" ? "TARGET" : s.result === "loss" ? "STOPPED" : s.result === "flat" ? "FLAT" : "OPEN";
+        td.appendChild(p);
+      } else if (idx === 9) {
+        const p = document.createElement("span");
+        p.className = "pill " + (liq ? "liq" : "open");
+        p.textContent = liq ? "LIQUIDATED" : "survived";
+        td.appendChild(p);
+      } else {
+        td.textContent = c;
+      }
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  }
+}
+
+function renderBarTable(candles, ind, signals) {
+  const body = $("bar-body");
+  clear(body);
+  const sigAt = new Map(signals.map(s => [s.i, s]));
+  const start = Math.max(0, candles.length - 90);
+  for (let i = candles.length - 1; i >= start; i--) {
+    const c = candles[i], s = sigAt.get(i);
+    const tr = document.createElement("tr");
+    const vals = [fmtClock(c.t), fmtP(c.o), fmtP(c.h), fmtP(c.l), fmtP(c.c), c.v.toFixed(2),
+      ind.tsi[i] != null ? ind.tsi[i].toFixed(3) : "—",
+      s ? (s.dir === "long" ? "LONG sweep" : "SHORT sweep") : ""];
+    for (const v of vals) {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+}
+
+/* ============================================================
+   Cycle
+   ============================================================ */
+let lastSignals = [];
+
+async function tick() {
+  document.body.classList.add("loading");
+  const ok = await refresh();
+  document.body.classList.remove("loading");
+
+  $("offline").classList.toggle("hidden", ok || !store.candles);
+  if (!store.candles) {
+    $("src-badge").textContent = "no feed reachable";
+    return;
+  }
+  $("src-badge").textContent = (store.stale ? "stale · " : "live · ") + store.source +
+    " · updated " + fmtClock(store.at) + " UTC";
+
+  draw();
+}
+
+function draw() {
+  const candles = store.candles;
+  if (!candles) return;
+  const ind = computeIndicators(candles);
+  const S = STRICTNESS[cfg.strict];
+
+  const last = candles[candles.length - 1], prev = candles[candles.length - 2];
+  $("live-price").textContent = fmtP(last.c);
+  const chg = last.c - prev.c;
+  const chgEl = $("live-chg");
+  chgEl.textContent = fmtSigned(chg, 2) + " (" + fmtSigned(chg / prev.c * 100, 2) + "%)";
+  chgEl.style.color = chg >= 0 ? "var(--good)" : "var(--critical)";
+
+  const tNow = ind.tsi[candles.length - 1];
+  const band = resolvedBand(ind, candles.length - 1, S);
+  $("tsi-now").textContent = (tNow == null ? "—" : "now " + tNow.toFixed(3)) +
+    (band ? "   ·   band ±" + band.toFixed(2) : "");
+  $("tsi-title-n").textContent = cfg.tsiLong + "/" + cfg.tsiShort;
+
+  const signals = replay(candles, ind, S);
+  lastSignals = signals;
+
+  // A setup is "live" only if it fired on the newest bar.
+  const live = signals.length && signals[signals.length - 1].i === candles.length - 1
+    ? signals[signals.length - 1] : null;
+
+  renderVerdict(live, candles, ind);
+  renderLeverage(live);
+  renderStats(replayStats(signals));
+  renderPrice(candles, ind, live, signals);
+  renderTsi(candles, ind, band);
+  renderLog(signals);
+  renderBarTable(candles, ind, signals);
+}
+
+/* ============================================================
+   Controls
+   ============================================================ */
+const BINDINGS = [
+  ["f-lev", "lev", v => Math.max(1, Math.min(1000, +v || 1))],
+  ["f-cap", "capital", v => Math.max(1, +v || 1)],
+  ["f-fee", "feePct", v => Math.max(0, +v || 0)],
+  ["f-mmr", "mmrPct", v => Math.max(0, +v || 0)],
+  ["f-tsil", "tsiLong", v => Math.max(2, Math.min(60, Math.round(+v) || 25))],
+  ["f-tsis", "tsiShort", v => Math.max(2, Math.min(40, Math.round(+v) || 13))],
+  ["f-band", "tsiBand", v => Math.max(0, Math.min(1, +v || 0))],
+  ["f-stopbuf", "stopBuf", v => Math.max(0, Math.min(6, +v || 0))],
+  ["f-strict", "strict", v => v],
+  ["f-bars", "bars", v => +v],
+];
+function syncInputs() {
+  for (const [id, key] of BINDINGS) $(id).value = cfg[key];
+}
+for (const [id, key, coerce] of BINDINGS) {
+  $(id).addEventListener("change", () => {
+    cfg[key] = coerce($(id).value);
+    $(id).value = cfg[key];
+    save();
+    draw();
+  });
+}
+$("reset-btn").addEventListener("click", () => {
+  cfg = Object.assign({}, DEFAULTS);
+  save(); syncInputs(); draw();
+});
+$("tbl-btn").addEventListener("click", e => {
+  const w = $("bar-tbl-wrap"), open = w.classList.toggle("hidden");
+  e.target.textContent = open ? "Show table" : "Hide table";
+  e.target.setAttribute("aria-expanded", String(!open));
+});
+$("theme-btn").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : cur === "light" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("ethsweep_theme", next); } catch (_) {}
+  draw();
+});
+try {
+  const th = localStorage.getItem("ethsweep_theme");
+  if (th) document.documentElement.setAttribute("data-theme", th);
+} catch (_) {}
+
+let rt;
+window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(draw, 150); });
+
+syncInputs();
+tick();
+setInterval(tick, REFRESH_MS);
+</script>
+</body>
+</html>

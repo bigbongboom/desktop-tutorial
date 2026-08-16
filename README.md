@@ -1,53 +1,11 @@
 # Crypto Signal Desk
 
-Two self-contained dashboards, one file each, zero dependencies — open either in any browser.
+A self-contained crypto analysis dashboard for **Bitcoin, Ethereum, Solana and Hyperliquid (HYPE)**.
+One file, zero dependencies — open `index.html` in any browser.
 
-| File | What it is for |
-|---|---|
-| `index.html` | The multi-asset signal desk — BTC / ETH / SOL / HYPE across 15m–1D. |
-| `sweep.html` | **ETH Sweep Desk** — one job: find the 1-minute liquidity-sweep reversal and price it at high leverage. |
-
----
-
-## ETH Sweep Desk (`sweep.html`)
-
-Finds the pattern by itself and marks it: a **range level** is swept, price **reclaims** it,
-**TSI** is at its extreme and turning — then long or short back into the range.
-
-- **Levels drawn for you** — pivots clustered into horizontal levels with two or more touches,
-  plus fitted sloped channel lines. Near-duplicates are merged and the slope is capped, so what
-  you get is the two or three lines a chartist would actually draw, not thirty micro-levels.
-- **Sweep detection** — the wick must pierce the level and the close must return inside within
-  three bars, with a volume thrust. Rejection is measured across the **whole sweep**, not one
-  bar: a three-bar sweep puts its low on a bar that closes at its low and therefore has no wick
-  at all.
-- **TSI band that adapts** — scaled −1…+1 to match a TradingView pane. The extreme band is
-  calibrated to where TSI actually reaches (expanding window, no lookahead) rather than pinned
-  to a number, because the scale depends entirely on the lengths you choose. Pin it yourself by
-  setting a non-zero band.
-- **Trade plan** — entry on the reclaim, stop beyond the sweep wick by a configurable ATR
-  buffer, target the opposite side of the range with a 1:1 floor.
-- **Leverage panel, told straight** — position size, liquidation price, how far the stop sits
-  toward liquidation, loss-if-stopped and round-trip fees as a share of margin, net P&L after
-  fees both ways, and the leverage at which that exact stop would clear liquidation with a 30%
-  buffer. Sizing is never auto-adjusted; the numbers are shown and the call is yours.
-- **Two gates that exist because of leverage** — a stop tighter than one-minute noise is
-  rejected, and so is a target that cannot clear its own round-trip fee. At 500× the round trip
-  costs 0.04% of the position, which on ETH near $1,880 is about 0.75 of a point.
-- **Honest replay** — every sweep in the loaded window, levels rebuilt from the data available
-  at each bar, entries filling on the signal close, stops counted before targets. It reports
-  hit rate, average R, how many setups would have been **liquidated** before resolving, and the
-  net result of taking every one of them at your leverage.
-
-Data comes from **Coinbase ETH-USD first** (Binance → OKX → Hyperliquid as fallbacks). This is
-deliberate: ETH-USD on Coinbase ran about 1.7 points from ETH-USDT elsewhere while this was
-built — roughly 0.09%, which is most of a whole stop at these sizes. Scan the book you trade.
-
-**Read the replay numbers before trusting the pattern.** Over a recent ~2.8-day sample the
-detector's own encoding of this setup did not make money at 500× in any configuration tested,
-and roughly 30% of its setups saw an adverse excursion past liquidation. That is a small sample
-and a rules-based approximation of a discretionary read — but it is what the data said, and the
-dashboard reports it rather than hiding it.
+> Looking for the 1-minute liquidity-sweep scalper? That is a **separate, self-contained
+> dashboard** in [`sweep/`](sweep/) with its own README — different pattern, different
+> timeframe, its own settings, no shared code.
 
 ## What it does
 
@@ -141,7 +99,7 @@ dashboard reports it rather than hiding it.
 ## Usage
 
 ```sh
-./serve.sh            # http://localhost:8765/sweep.html
+./serve.sh            # http://localhost:8765/
 ./serve.sh 9000       # or pick your own port
 ```
 
@@ -149,11 +107,10 @@ Prefer this over double-clicking the file. Opened as `file://` the page has a nu
 origin, and some browsers will then block the exchange API calls the live feed needs.
 
 Alternatively, enable GitHub Pages on this repo — the workflow in
-`.github/workflows/deploy-pages.yml` publishes on every push to `main`, giving both
-dashboards a URL you can open from a phone.
+`.github/workflows/deploy-pages.yml` publishes on every push to `main`, giving each
+dashboard a URL you can open from a phone.
 
-For the signal desk, pick a timeframe, set your capital and risk per trade, and click
-an asset card.
+Pick a timeframe, set your capital and risk per trade, and click an asset card.
 
 ## Disclaimer
 

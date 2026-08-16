@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Serve the dashboards locally.
 #
-#   ./serve.sh          -> http://localhost:8765/sweep.html
+#   ./serve.sh          -> http://localhost:8765/sweep/
 #   ./serve.sh 9000     -> a port of your choosing
 #
 # Use this rather than double-clicking the file: opening it as file:// gives the
@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PORT="${1:-8765}"
-URL="http://localhost:${PORT}/sweep.html"
+URL="http://localhost:${PORT}/sweep/"
 
 if command -v python3 >/dev/null 2>&1; then
   SERVE=(python3 -m http.server "$PORT")
@@ -26,7 +26,7 @@ else
 fi
 
 echo "ETH Sweep Desk  ->  ${URL}"
-echo "Signal desk     ->  http://localhost:${PORT}/index.html"
+echo "Signal desk     ->  http://localhost:${PORT}/"
 echo "Ctrl-C to stop."
 echo
 

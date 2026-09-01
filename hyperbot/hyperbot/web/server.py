@@ -1,0 +1,460 @@
+"""Local web dashboard: a browser view of the desk on http://localhost:8730.
+
+Binds to 127.0.0.1 by default and deliberately. The UI exposes actions that can
+move money (rescan, flatten), so it must not be reachable from the network unless
+the operator explicitly asks with --host.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from aiohttp import WSMsgType, web
+
+from ..api.exchange import ExchangeClient
+from ..api.info import InfoClient
+from ..config import Config
+from ..copy.engine import CopyEngine
+from ..copy.reconciler import reconcile
+from ..copy.sizing import LeaderView, build_target_book
+from ..discovery.scanner import TraderScanner, allocations, select_roster
+from ..log import get_logger
+from ..notify.dispatcher import Channel, Dispatcher, Event
+from ..store.db import Store
+from ..util import now_ms, safe_div, utc_now
+
+log = get_logger("web")
+
+DASHBOARD = Path(__file__).parent / "dashboard.html"
+
+
+class WebChannel(Channel):
+    """Notification transport that pushes into every connected browser."""
+
+    name = "web"
+
+    def __init__(self, hub: "EventHub"):
+        self.hub = hub
+
+    async def send(self, event: Event) -> None:
+        await self.hub.publish(
+            {
+                "type": "event",
+                "ts": now_ms(),
+                "severity": event.severity.name,
+                "title": event.title,
+                "body": event.body,
+                "fields": event.fields,
+            }
+        )
+
+
+@dataclass
+class EventHub:
+    """Fan-out to browser WebSockets, with a replay buffer for late joiners."""
+
+    sockets: set[web.WebSocketResponse] = field(default_factory=set)
+    history: list[dict[str, Any]] = field(default_factory=list)
+    limit: int = 200
+
+    async def publish(self, message: dict[str, Any]) -> None:
+        if message.get("type") == "event":
+            self.history.append(message)
+            del self.history[: max(0, len(self.history) - self.limit)]
+        dead = []
+        for socket in self.sockets:
+            try:
+                await socket.send_json(message)
+            except Exception:  # noqa: BLE001 - a closed tab is not an error
+                dead.append(socket)
+        for socket in dead:
+            self.sockets.discard(socket)
+
+
+class DashboardServer:
+    def __init__(self, config: Config, *, run_engine: bool = True):
+        self.config = config
+        self.run_engine = run_engine
+        self.hub = EventHub()
+        self.store = Store(config.db_path)
+        self.info: InfoClient | None = None
+        self.engine: CopyEngine | None = None
+        self._engine_task: asyncio.Task | None = None
+        self._scan_task: asyncio.Task | None = None
+        self._scan_status = "idle"
+        self._started = utc_now()
+
+    # ---- snapshot --------------------------------------------------------- #
+
+    async def snapshot(self) -> dict[str, Any]:
+        config = self.config
+        blockers = config.live_blockers()
+        data: dict[str, Any] = {
+            "config": {
+                "network": config.network,
+                "live": config.can_trade_live,
+                "blockers": blockers,
+                "account": config.account_address,
+                "exposure_multiplier": config.copy.exposure_multiplier,
+                "max_gross": config.risk.max_gross_exposure,
+                "daily_loss_limit": config.risk.daily_loss_limit,
+                "roster_mode": config.copy.roster,
+                "engine_running": self._engine_task is not None
+                and not self._engine_task.done(),
+                "scan_status": self._scan_status,
+                "started": self._started.isoformat(timespec="seconds"),
+            },
+            "account": None,
+            "positions": [],
+            "targets": [],
+            "adjustments": [],
+            "roster": [],
+            "elite": self._traders("elite_score"),
+            "rising": self._traders("rising_score"),
+            "orders": self._orders(),
+            "equity_series": self._equity_series(),
+            "events": self.hub.history[-60:],
+            "risk": self._risk(),
+        }
+
+        if not (self.info and config.account_address):
+            return data
+
+        try:
+            account = await self.info.account_state(config.account_address)
+            meta = await self.info.asset_meta(refresh=True)
+        except Exception as exc:  # noqa: BLE001 - the page must still render
+            data["error"] = f"could not read account: {exc}"
+            return data
+
+        day_start = self._day_start_equity(account.account_value)
+        data["account"] = {
+            "equity": account.account_value,
+            "gross": account.total_notional,
+            "margin_used": account.total_margin_used,
+            "withdrawable": account.withdrawable,
+            "leverage": account.leverage,
+            "day_pnl": account.account_value - day_start,
+            "day_pnl_pct": safe_div(account.account_value - day_start, day_start, 0.0),
+            "unrealized": sum(p.unrealized_pnl for p in account.positions.values()),
+        }
+        data["positions"] = [
+            {
+                "coin": coin,
+                "side": "LONG" if position.is_long else "SHORT",
+                "size": position.size,
+                "entry": position.entry_price,
+                "mark": meta[coin].mark_price if coin in meta else 0.0,
+                "notional": position.signed_notional,
+                "upnl": position.unrealized_pnl,
+                "leverage": position.leverage,
+                "liquidation": position.liquidation_price,
+            }
+            for coin, position in sorted(
+                account.positions.items(), key=lambda kv: -kv[1].position_value
+            )
+        ]
+
+        roster_rows = self.store.load_roster()
+        data["roster"] = [
+            {
+                "address": row["address"],
+                "label": row["label"],
+                "allocation": row["allocation"],
+                "source": row["source"],
+            }
+            for row in roster_rows
+        ]
+        if not roster_rows:
+            return data
+
+        try:
+            states = await self.info.account_states([row["address"] for row in roster_rows])
+        except Exception as exc:  # noqa: BLE001
+            data["error"] = f"could not read leaders: {exc}"
+            return data
+
+        labels = {row["address"].lower(): row["label"] for row in roster_rows}
+        weights = {row["address"].lower(): row["allocation"] for row in roster_rows}
+        views = {
+            address.lower(): LeaderView.from_state(state, labels.get(address.lower(), address))
+            for address, state in states.items()
+        }
+        book = build_target_book(
+            views, weights, account.account_value, self.config.copy, self.config.risk
+        )
+        data["targets"] = [
+            {
+                "coin": coin,
+                "side": position.direction,
+                "weight": position.weight,
+                "notional": position.notional,
+                "current": account.signed_notional(coin),
+                "contributors": position.contributors,
+            }
+            for coin, position in sorted(
+                book.positions.items(), key=lambda kv: -abs(kv[1].notional)
+            )
+        ]
+        data["book"] = {
+            "gross": book.gross,
+            "net": book.net,
+            "gross_scale": book.gross_scale,
+            "clamped": book.clamped,
+        }
+        adjustments = reconcile(
+            account,
+            {coin: position.notional for coin, position in book.positions.items()},
+            meta,
+            self.config.copy,
+            self.config.risk,
+        )
+        data["adjustments"] = [
+            {
+                "coin": adjustment.coin,
+                "kind": adjustment.kind,
+                "current": adjustment.current_notional,
+                "target": adjustment.target_notional,
+                "delta": adjustment.delta_notional,
+            }
+            for adjustment in adjustments
+        ]
+        return data
+
+    def _risk(self) -> dict[str, Any]:
+        if not self.engine:
+            return {"kill_switch": False, "halted": False, "reason": ""}
+        state = self.engine.risk.state
+        return {
+            "kill_switch": state.kill_switch,
+            "halted": state.halted,
+            "reason": state.kill_reason or state.halt_reason,
+            "day": state.day,
+            "day_start_equity": state.day_start_equity,
+            "high_water_mark": state.high_water_mark,
+        }
+
+    def _traders(self, column: str, limit: int = 12) -> list[dict[str, Any]]:
+        return [
+            {
+                "address": row["address"],
+                "label": row["label"],
+                "elite": row["elite_score"],
+                "rising": row["rising_score"],
+                "perp_capital": row["perp_capital"],
+                "roi_month": row["roi_month"],
+                "max_drawdown": row["max_drawdown"],
+                "consistency": row["consistency"],
+                "r_squared": row["r_squared"],
+                "pace_ratio": row["pace_ratio"],
+                "days_active": row["days_active"],
+            }
+            for row in self.store.top_traders(column, limit)
+        ]
+
+    def _orders(self, limit: int = 25) -> list[dict[str, Any]]:
+        return [
+            {
+                "ts": row["ts_ms"],
+                "coin": row["coin"],
+                "side": row["side"],
+                "size": row["size"],
+                "price": row["limit_price"],
+                "notional": row["notional"],
+                "kind": row["kind"],
+                "status": row["status"],
+                "reduce_only": bool(row["reduce_only"]),
+                "error": row["error"] or "",
+            }
+            for row in self.store.recent_orders(limit)
+        ]
+
+    def _equity_series(self, limit: int = 400) -> list[dict[str, Any]]:
+        rows = list(
+            self.store.connection.execute(
+                "SELECT ts_ms, account_value, day_pnl FROM equity ORDER BY ts_ms DESC LIMIT ?",
+                (limit,),
+            )
+        )
+        return [
+            {"ts": row["ts_ms"], "equity": row["account_value"], "day_pnl": row["day_pnl"]}
+            for row in reversed(rows)
+        ]
+
+    def _day_start_equity(self, fallback: float) -> float:
+        if self.engine and self.engine.risk.state.day_start_equity:
+            return self.engine.risk.state.day_start_equity
+        row = self.store.connection.execute(
+            "SELECT account_value FROM equity WHERE day = date('now') ORDER BY ts_ms LIMIT 1"
+        ).fetchone()
+        return row["account_value"] if row else fallback
+
+    # ---- actions ---------------------------------------------------------- #
+
+    async def trigger_scan(self) -> dict[str, Any]:
+        if self._scan_task and not self._scan_task.done():
+            return {"ok": False, "message": "a scan is already running"}
+
+        async def work() -> None:
+            self._scan_status = "running"
+            await self.hub.publish({"type": "scan", "status": "running"})
+            try:
+                assert self.info is not None
+                scanner = TraderScanner(self.info, self.config.discovery)
+                result = await scanner.scan(force_refresh=True)
+                for entry in result.elite + result.rising:
+                    self.store.save_trader(entry)
+                chosen = select_roster(
+                    result,
+                    mode=self.config.copy.roster,
+                    max_leaders=self.config.copy.max_leaders,
+                    rising_slots=self.config.copy.rising_slots,
+                )
+                weights = allocations(chosen, mode=self.config.copy.allocation)
+                self.store.replace_roster(
+                    [
+                        (
+                            entry.address,
+                            entry.label,
+                            weights.get(entry.address, 0.0),
+                            "rising" if entry.rising.total >= entry.elite.total else "elite",
+                        )
+                        for entry in chosen
+                    ]
+                )
+                self._scan_status = "idle"
+                await self.hub.publish(
+                    {"type": "scan", "status": "done", "summary": result.summary()}
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._scan_status = "failed"
+                log.error("scan failed: %s", exc, exc_info=True)
+                await self.hub.publish({"type": "scan", "status": "failed", "error": str(exc)})
+
+        self._scan_task = asyncio.create_task(work())
+        return {"ok": True, "message": "scan started"}
+
+    async def flatten(self) -> dict[str, Any]:
+        if not (self.engine and self.info and self.config.account_address):
+            return {"ok": False, "message": "engine not running"}
+        account = await self.info.account_state(self.config.account_address)
+        meta = await self.info.asset_meta(refresh=True)
+        if not account.positions:
+            return {"ok": False, "message": "no open positions"}
+        await self.engine.flatten(account, meta, reason="operator pressed Flatten in the UI")
+        return {"ok": True, "message": f"flattened {len(account.positions)} positions"}
+
+
+# --------------------------------------------------------------------------- #
+# routes
+# --------------------------------------------------------------------------- #
+
+
+def build_app(server: DashboardServer, dispatcher: Dispatcher) -> web.Application:
+    app = web.Application()
+
+    async def index(_: web.Request) -> web.StreamResponse:
+        return web.FileResponse(DASHBOARD)
+
+    async def favicon(_: web.Request) -> web.StreamResponse:
+        mark = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+            '<rect width="32" height="32" rx="7" fill="#2a78d6"/>'
+            '<path d="M8 21l5-7 4 4 7-9" stroke="#fff" stroke-width="3" '
+            'fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        )
+        return web.Response(text=mark, content_type="image/svg+xml")
+
+    async def api_snapshot(_: web.Request) -> web.StreamResponse:
+        return web.json_response(await server.snapshot())
+
+    async def api_scan(_: web.Request) -> web.StreamResponse:
+        return web.json_response(await server.trigger_scan())
+
+    async def api_flatten(request: web.Request) -> web.StreamResponse:
+        body = await request.json() if request.can_read_body else {}
+        if body.get("confirm") != "FLATTEN":
+            return web.json_response(
+                {"ok": False, "message": "confirmation required"}, status=400
+            )
+        return web.json_response(await server.flatten())
+
+    async def websocket(request: web.Request) -> web.StreamResponse:
+        socket = web.WebSocketResponse(heartbeat=30)
+        await socket.prepare(request)
+        server.hub.sockets.add(socket)
+        try:
+            await socket.send_json({"type": "hello", "events": server.hub.history[-60:]})
+            async for message in socket:
+                if message.type == WSMsgType.ERROR:
+                    break
+        finally:
+            server.hub.sockets.discard(socket)
+        return socket
+
+    app.add_routes(
+        [
+            web.get("/", index),
+            web.get("/favicon.ico", favicon),
+            web.get("/api/snapshot", api_snapshot),
+            web.post("/api/scan", api_scan),
+            web.post("/api/flatten", api_flatten),
+            web.get("/ws", websocket),
+        ]
+    )
+    app["dispatcher"] = dispatcher
+    return app
+
+
+async def serve(config: Config, host: str, port: int, *, run_engine: bool = True) -> None:
+    from ..notify.dispatcher import build_dispatcher
+
+    server = DashboardServer(config, run_engine=run_engine)
+    dispatcher = build_dispatcher(config.notify)
+    dispatcher.add(WebChannel(server.hub))
+
+    async with InfoClient(
+        config.public_api_url, concurrency=config.discovery.concurrency
+    ) as info:
+        server.info = info
+        exchange = ExchangeClient(config)
+        exchange.connect()
+
+        app = build_app(server, dispatcher)
+        runner = web.AppRunner(app, access_log=None)
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+
+        url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0') else host}:{port}"
+        log.info("=" * 62)
+        log.info("dashboard ready at %s", url)
+        if host not in ("127.0.0.1", "localhost"):
+            log.warning("bound to %s - this UI can place orders. Do not expose it.", host)
+        log.info("=" * 62)
+
+        if run_engine and config.account_address:
+            server.engine = CopyEngine(config, info, exchange, dispatcher, server.store)
+            server._engine_task = asyncio.create_task(server.engine.start())
+        elif run_engine:
+            log.warning("no account address set - dashboard runs in discovery-only mode")
+            await dispatcher.info(
+                "Dashboard started (discovery only)",
+                "Set HYPERLIQUID_ACCOUNT_ADDRESS to track an account and mirror leaders.",
+            )
+
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if server.engine:
+                await server.engine.stop()
+            if server._engine_task:
+                server._engine_task.cancel()
+            await runner.cleanup()
+            await dispatcher.close()
+            server.store.close()

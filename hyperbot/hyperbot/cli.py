@@ -243,6 +243,43 @@ async def cmd_run(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_serve(config: Config, args: argparse.Namespace) -> int:
+    """Run the local web dashboard (and the engine, unless --no-engine)."""
+    try:
+        from .web.server import serve
+    except ImportError as exc:
+        print(f"the dashboard needs aiohttp: pip install aiohttp  ({exc})")
+        return 1
+
+    stop = asyncio.Event()
+
+    def request_stop(*_: object) -> None:
+        stop.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, request_stop)
+        except NotImplementedError:  # Windows
+            signal.signal(sig, request_stop)
+
+    task = asyncio.create_task(
+        serve(config, args.host, args.port, run_engine=not args.no_engine)
+    )
+    done, _ = await asyncio.wait(
+        {task, asyncio.create_task(stop.wait())}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if task in done:
+        return 0 if not task.exception() else 1
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        pass
+    log.info("dashboard stopped")
+    return 0
+
+
 async def cmd_notify_test(config: Config, _: argparse.Namespace) -> int:
     dispatcher = build_dispatcher(config.notify)
     if not dispatcher.channels:
@@ -370,6 +407,18 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="run the copy engine")
     run.set_defaults(handler=cmd_run)
 
+    serve = subparsers.add_parser("serve", help="run the web dashboard on localhost")
+    serve.add_argument("--port", type=int, default=8730, help="port (default 8730)")
+    serve.add_argument(
+        "--host", default="127.0.0.1",
+        help="bind address. Defaults to localhost on purpose: the UI can place orders.",
+    )
+    serve.add_argument(
+        "--no-engine", action="store_true",
+        help="dashboard only - do not run the copy engine",
+    )
+    serve.set_defaults(handler=cmd_serve)
+
     notify = subparsers.add_parser("notify-test", help="send a test notification")
     notify.set_defaults(handler=cmd_notify_test)
 
@@ -387,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
     for warning in warnings:
         log.warning(warning)
 
-    if args.command in ("run", "close-all") and config.can_trade_live:
+    if args.command in ("run", "close-all", "serve") and config.can_trade_live:
         log.warning("=" * 68)
         log.warning("LIVE TRADING IS ARMED on %s - real money is at risk", config.network)
         log.warning("=" * 68)

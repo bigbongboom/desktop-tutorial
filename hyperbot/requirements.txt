@@ -2,6 +2,7 @@
 httpx>=0.27.0
 websockets>=12.0
 PyYAML>=6.0
+aiohttp>=3.9.0          # local web dashboard (python run.py serve)
 
 # Live trading — order signing. Not needed for discovery or dry-run.
 hyperliquid-python-sdk>=0.9.0

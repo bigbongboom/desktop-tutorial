@@ -51,24 +51,51 @@ twice. Ranking every candidate by elite criteria starves the climber roster by
 construction — the scan budget goes entirely to large established accounts and
 climber-band accounts are never even fetched.
 
-## Quick start
+## Quick start — the dashboard
 
 ```bash
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
 cp .env.example .env            # optional: notifications, and later a key
 
+python run.py serve
+```
+
+Then open **http://localhost:8730**.
+
+That one command runs everything: it scans and ranks traders, picks a roster, starts the
+copy engine in dry-run, and serves a live dashboard — equity chart, open positions,
+target book, pending orders, both trader rosters, and a live event feed streaming over
+WebSocket. It works with **no private key**; without one it simply narrates the orders it
+would have placed.
+
+```bash
+python run.py serve --port 9000     # different port
+python run.py serve --no-engine     # dashboard only, no trading loop
+```
+
+It binds to `127.0.0.1` **on purpose** — the UI has Rescan and Flatten buttons, so it must
+not be reachable from your network. `--host` overrides that and warns you.
+
+Set `HYPERLIQUID_ACCOUNT_ADDRESS` in `.env` to track an account; without it the dashboard
+runs in discovery-only mode (rosters and rankings, no positions).
+
+## The CLI
+
+Everything the dashboard does is also a command, if you prefer the terminal:
+
+```bash
 python run.py scan --explain    # rank both rosters (no key needed)
 python run.py leaders           # show the selected roster
 python run.py preview           # target book + the orders it would place
 python run.py watch             # live leader trades -> notifications, no trading
-python run.py run               # the copy engine (dry-run by default)
+python run.py run               # the copy engine, headless (dry-run by default)
 python run.py status            # your account, positions, P&L
 python run.py close-all         # flatten everything, reduce-only
 ```
 
 `scan`, `leaders`, `preview`, `watch` and `status` need **no private key at all** — they
-read public data. Set `HYPERLIQUID_ACCOUNT_ADDRESS` to use `status`/`preview`/`run`.
+read public data.
 
 ## Safety: three locks on live trading
 

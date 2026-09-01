@@ -181,6 +181,19 @@ to console, Telegram, Discord and generic webhooks.
 `WARN` slippage rejection · WS reconnect · risk clamp applied · leader dropped for drawdown
 `CRITICAL` kill switch tripped · daily loss limit · exchange auth failure
 
+## 8b. Local dashboard
+
+`python run.py serve` runs the engine and a web UI together on
+**http://localhost:8730**: equity chart, open positions, target book vs current, pending
+adjustments, both trader rosters, recent orders, and a live event feed pushed over
+WebSocket by a `WebChannel` plugged into the same dispatcher as Telegram and Discord.
+
+It binds to `127.0.0.1` by default and deliberately — the UI exposes Rescan and Flatten,
+so it must not be reachable from the network unless the operator passes `--host`, which
+warns. Long/short use the blue/red diverging pair rather than green/red: same polarity,
+and it stays readable with colour-vision deficiency (validated CVD dE 21.6 light /
+19.2 dark against an >= 8 target).
+
 ## 9. Safety locks on live trading
 
 Live orders require **three independent switches**, all off by default:

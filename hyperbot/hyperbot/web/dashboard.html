@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hyperbot — Hyperliquid copy desk</title>
+<style>
+/* Palette matches the repo's existing dashboard; both modes are selected,
+   not an automatic flip. Long/short use the diverging pair (blue/red) rather
+   than green/red: it carries the same polarity and stays legible for
+   colour-vision deficiency (validated CVD dE 21.6 light / 19.2 dark). */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #ffffff;
+  --surface-2: #f0efec;
+  --border: #e1e0d9;
+  --grid: #e1e0d9;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-muted: #898781;
+  --long: #2a78d6;
+  --short: #e34948;
+  --up: #199e70;
+  --down: #e34948;
+  --accent: #2a78d6;
+  --warn: #eda100;
+  --critical: #d03b3b;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #262624;
+    --border: #2c2c2a;
+    --grid: #2c2c2a;
+    --text: #ffffff;
+    --text-2: #c3c2b7;
+    --text-muted: #898781;
+    --long: #3987e5;
+    --short: #e66767;
+    --up: #1baf7a;
+    --down: #e66767;
+    --accent: #3987e5;
+    --warn: #c98500;
+    --critical: #e66767;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.25);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #262624; --border: #2c2c2a;
+  --grid: #2c2c2a; --text: #ffffff; --text-2: #c3c2b7; --text-muted: #898781;
+  --long: #3987e5; --short: #e66767; --up: #1baf7a; --down: #e66767;
+  --accent: #3987e5; --warn: #c98500; --critical: #e66767;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.25);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 20px 24px 64px; }
+
+/* ---- header ---- */
+header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 0 18px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+}
+h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; font-weight: 650; }
+h1 span { color: var(--text-muted); font-weight: 400; }
+.spacer { flex: 1; }
+.badge {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: .01em;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+}
+.badge.live { background: color-mix(in srgb, var(--down) 14%, transparent); color: var(--down); border-color: transparent; }
+.badge.dry  { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border-color: transparent; }
+.badge.kill { background: color-mix(in srgb, var(--critical) 16%, transparent); color: var(--critical); border-color: transparent; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.dot.pulse { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+button {
+  font: inherit; font-size: 13px; font-weight: 550; padding: 7px 14px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); cursor: pointer; transition: background .12s, border-color .12s;
+}
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:disabled { opacity: .45; cursor: default; }
+button.danger { color: var(--down); border-color: color-mix(in srgb, var(--down) 35%, var(--border)); }
+button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--down) 10%, transparent); }
+
+/* ---- layout ---- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+.tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 600; }
+.tile .value { font-size: 24px; font-weight: 650; letter-spacing: -.02em; margin-top: 6px; }
+.tile .sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+
+.grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+@media (min-width: 1080px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden; }
+.card > h2 {
+  font-size: 13px; font-weight: 650; margin: 0; padding: 13px 16px;
+  border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px;
+}
+.card > h2 .hint { font-weight: 400; color: var(--text-muted); font-size: 12px; }
+.card .body { padding: 14px 16px; }
+.pos { color: var(--up); } .neg { color: var(--down); }
+.long { color: var(--long); } .short { color: var(--short); }
+
+/* ---- tables ---- */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: right; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+     color: var(--text-muted); font-weight: 600; padding: 9px 10px; border-bottom: 1px solid var(--border);
+     position: sticky; top: 0; background: var(--surface); }
+th:first-child, td:first-child { text-align: left; padding-left: 16px; }
+th:last-child, td:last-child { padding-right: 16px; }
+td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--surface-2); }
+.scroll { overflow-x: auto; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; background: var(--surface-2); color: var(--text-2); }
+.pill.long { background: color-mix(in srgb, var(--long) 14%, transparent); color: var(--long); }
+.pill.short { background: color-mix(in srgb, var(--short) 14%, transparent); color: var(--short); }
+.empty { padding: 28px 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+/* ---- tabs ---- */
+.tabs { display: flex; gap: 4px; padding: 10px 16px 0; border-bottom: 1px solid var(--border); }
+.tab { padding: 8px 14px; font-size: 13px; font-weight: 600; color: var(--text-muted);
+       border: none; background: none; border-bottom: 2px solid transparent; border-radius: 0; cursor: pointer; }
+.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ---- charts ---- */
+.chart { width: 100%; display: block; overflow: visible; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); padding: 0 16px 12px; }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 11px; height: 11px; border-radius: 3px; }
+.tooltip {
+  position: fixed; pointer-events: none; z-index: 50; opacity: 0; transition: opacity .1s;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap;
+}
+.tooltip .t-title { font-weight: 650; margin-bottom: 3px; }
+.tooltip .t-row { color: var(--text-2); }
+
+/* ---- feed ---- */
+.feed { max-height: 380px; overflow-y: auto; }
+.ev { display: flex; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ev:last-child { border-bottom: none; }
+.ev time { color: var(--text-muted); font-size: 11px; white-space: nowrap; padding-top: 2px; }
+.ev .ev-body { min-width: 0; }
+.ev .ev-title { font-weight: 550; }
+.ev .ev-detail { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.ev.TRADE .ev-title { color: var(--accent); }
+.ev.WARN .ev-title { color: var(--warn); }
+.ev.CRITICAL .ev-title { color: var(--critical); }
+.banner { padding: 11px 16px; border-radius: 10px; margin-bottom: 16px; font-size: 13px; border: 1px solid transparent; }
+.banner.warn { background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.banner.crit { background: color-mix(in srgb, var(--critical) 12%, transparent); border-color: color-mix(in srgb, var(--critical) 35%, transparent); color: var(--critical); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>hyperbot <span>/ Hyperliquid copy desk</span></h1>
+    <span class="badge" id="b-net">—</span>
+    <span class="badge" id="b-mode">—</span>
+    <span class="badge" id="b-conn"><span class="dot pulse"></span> connecting</span>
+    <span class="spacer"></span>
+    <button id="btn-theme" title="Toggle theme">◐</button>
+    <button id="btn-scan">Rescan traders</button>
+    <button id="btn-flatten" class="danger">Flatten all</button>
+  </header>
+
+  <div id="banners"></div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>Account equity <span class="hint" id="eq-hint"></span></h2>
+      <div class="body" style="padding-top:6px">
+        <svg class="chart" id="equity-chart" height="200" role="img"
+             aria-label="Account equity over time"></svg>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Exposure by coin <span class="hint">target vs current, long right / short left</span></h2>
+      <div class="legend" id="exposure-legend" style="padding-top:12px">
+        <span class="key"><span class="swatch" style="background:var(--long)"></span> long</span>
+        <span class="key"><span class="swatch" style="background:var(--short)"></span> short</span>
+        <span class="key"><span class="swatch" style="background:var(--long);opacity:.4;height:7px"></span> current (upper, faded)</span>
+        <span class="key"><span class="swatch" style="background:var(--long)"></span> target (lower, solid)</span>
+      </div>
+      <div class="body" style="padding-top:0">
+        <svg class="chart" id="exposure-chart" height="220" role="img"
+             aria-label="Target and current exposure by coin"></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Open positions <span class="hint" id="pos-hint"></span></h2>
+    <div class="scroll"><table id="positions"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Pending adjustments <span class="hint">what the next reconcile would place</span></h2>
+    <div class="scroll"><table id="adjustments"></table></div>
+  </div>
+
+  <div class="card">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-roster="elite">Top traders</button>
+      <button class="tab" role="tab" aria-selected="false" data-roster="rising">On the come up</button>
+      <span class="spacer"></span>
+    </div>
+    <div class="scroll"><table id="traders"></table></div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>Live feed</h2>
+      <div class="feed" id="feed"></div>
+    </div>
+    <div class="card">
+      <h2>Recent orders</h2>
+      <div class="scroll"><table id="orders"></table></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Following <span class="hint" id="roster-hint"></span></h2>
+    <div class="scroll"><table id="roster"></table></div>
+  </div>
+</div>
+
+<div class="tooltip" id="tip"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const tip = $("tip");
+let SNAP = null, ROSTER_TAB = "elite";
+
+/* ---------- formatting ---------- */
+const usd = (v) => {
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  const a = Math.abs(v), s = v < 0 ? "-" : "";
+  if (a >= 1e6) return `${s}$${(a/1e6).toFixed(2)}M`;
+  if (a >= 1e4) return `${s}$${(a/1e3).toFixed(1)}k`;
+  return `${s}$${a.toLocaleString(undefined,{maximumFractionDigits:2})}`;
+};
+const signedUsd = (v) => (v > 0 ? "+" : "") + usd(v);
+const pct = (v, d=1) => (v===null||v===undefined||!isFinite(v)) ? "—" : `${(v*100).toFixed(d)}%`;
+const signedPct = (v, d=2) => (v>0?"+":"") + pct(v,d);
+const num = (v, d=4) => (v===null||v===undefined||!isFinite(v)) ? "—"
+  : Math.abs(v) >= 1000 ? v.toLocaleString(undefined,{maximumFractionDigits:2})
+  : v.toLocaleString(undefined,{maximumSignificantDigits:d});
+const shortAddr = (a) => a && a.length > 12 ? `${a.slice(0,6)}…${a.slice(-4)}` : (a || "—");
+const clock = (ms) => new Date(ms).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+const cls = (v) => v > 0 ? "pos" : v < 0 ? "neg" : "";
+
+/* ---------- theme ---------- */
+const stored = (() => { try { return localStorage.getItem("hyperbot-theme"); } catch { return null; } })();
+if (stored) document.documentElement.dataset.theme = stored;
+$("btn-theme").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme
+    ? root.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("hyperbot-theme", root.dataset.theme); } catch {}
+  render();
+};
+
+/* ---------- tooltip ---------- */
+function showTip(evt, html) {
+  tip.innerHTML = html;
+  tip.style.opacity = "1";
+  const r = tip.getBoundingClientRect();
+  let x = evt.clientX + 14, y = evt.clientY - r.height - 10;
+  if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - 14;
+  if (y < 8) y = evt.clientY + 16;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => { tip.style.opacity = "0"; };
+
+/* ---------- charts ---------- */
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, attrs = {}) => {
+  const e = document.createElementNS(NS, n);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+};
+
+function drawEquity(series) {
+  const svg = $("equity-chart");
+  svg.innerHTML = "";
+  const W = svg.clientWidth || 600, H = 200;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if (!series || series.length < 2) {
+    $("eq-hint").textContent = "";
+    const msg = el("text", {x: W/2, y: H/2, "text-anchor": "middle",
+      fill: "var(--text-muted)", "font-size": 13});
+    msg.textContent = "no equity history yet — it fills in as the engine runs";
+    svg.append(msg);
+    return;
+  }
+  const P = {t: 14, r: 16, b: 24, l: 56};
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const vals = series.map(d => d.equity);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi === lo) { hi = lo * 1.001 + 1; lo = lo * 0.999 - 1; }
+  const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+  const X = (i) => P.l + (i / (series.length - 1)) * iw;
+  const Y = (v) => P.t + ih - ((v - lo) / (hi - lo)) * ih;
+
+  // recessive grid + axis labels
+  for (let k = 0; k <= 3; k++) {
+    const v = lo + (k / 3) * (hi - lo), y = Y(v);
+    svg.append(el("line", {x1: P.l, y1: y, x2: W - P.r, y2: y, stroke: "var(--grid)", "stroke-width": 1}));
+    const t = el("text", {x: P.l - 8, y: y + 4, "text-anchor": "end", fill: "var(--text-muted)", "font-size": 11});
+    t.textContent = usd(v); svg.append(t);
+  }
+  const first = series[0].equity, last = series[series.length-1].equity;
+  const up = last >= first;
+  const stroke = up ? "var(--up)" : "var(--down)";
+
+  const path = series.map((d, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(d.equity).toFixed(1)}`).join("");
+  const gid = "eqfill";
+  const grad = el("linearGradient", {id: gid, x1: 0, y1: 0, x2: 0, y2: 1});
+  grad.append(el("stop", {offset: "0%", "stop-color": stroke, "stop-opacity": .18}));
+  grad.append(el("stop", {offset: "100%", "stop-color": stroke, "stop-opacity": 0}));
+  const defs = el("defs");
+  defs.append(grad);
+  svg.append(defs);
+  svg.append(el("path", {d: `${path}L${X(series.length-1)},${P.t+ih}L${P.l},${P.t+ih}Z`, fill: `url(#${gid})`}));
+  svg.append(el("path", {d: path, fill: "none", stroke, "stroke-width": 2,
+    "stroke-linejoin": "round", "stroke-linecap": "round"}));
+
+  // hover crosshair
+  const cross = el("line", {y1: P.t, y2: P.t + ih, stroke: "var(--text-muted)", "stroke-width": 1,
+    "stroke-dasharray": "3 3", opacity: 0});
+  const dot = el("circle", {r: 4.5, fill: stroke, stroke: "var(--surface)", "stroke-width": 2, opacity: 0});
+  svg.append(cross); svg.append(dot);
+  const hit = el("rect", {x: P.l, y: P.t, width: iw, height: ih, fill: "transparent"});
+  svg.append(hit);
+  hit.addEventListener("mousemove", (evt) => {
+    const rect = svg.getBoundingClientRect();
+    const rel = (evt.clientX - rect.left) * (W / rect.width);
+    let i = Math.round(((rel - P.l) / iw) * (series.length - 1));
+    i = Math.max(0, Math.min(series.length - 1, i));
+    const d = series[i];
+    cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("opacity", 1);
+    dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(d.equity)); dot.setAttribute("opacity", 1);
+    showTip(evt, `<div class="t-title">${usd(d.equity)}</div>
+      <div class="t-row">${new Date(d.ts).toLocaleString()}</div>
+      <div class="t-row">day P&amp;L ${signedUsd(d.day_pnl)}</div>`);
+  });
+  hit.addEventListener("mouseleave", () => {
+    cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); hideTip();
+  });
+  $("eq-hint").textContent = `${series.length} samples · ${signedUsd(last - first)} over window`;
+}
+
+function drawExposure(targets) {
+  const svg = $("exposure-chart");
+  svg.innerHTML = "";
+  const W = svg.clientWidth || 600;
+  const rows = (targets || []).slice(0, 9);
+  const H = Math.max(120, rows.length * 26 + 34);
+  svg.setAttribute("height", H);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if (!rows.length) {
+    const t = el("text", {x: W/2, y: H/2, "text-anchor": "middle", fill: "var(--text-muted)", "font-size": 13});
+    t.textContent = "no target book — run a scan to pick leaders";
+    svg.append(t); return;
+  }
+  const P = {t: 8, r: 12, b: 22, l: 60};
+  const iw = W - P.l - P.r;
+  const max = Math.max(...rows.flatMap(r => [Math.abs(r.notional), Math.abs(r.current)]), 1);
+  const mid = P.l + iw / 2;
+  const scale = (v) => (v / max) * (iw / 2);
+
+  // zero baseline
+  svg.append(el("line", {x1: mid, y1: P.t, x2: mid, y2: H - P.b, stroke: "var(--grid)", "stroke-width": 1}));
+
+  rows.forEach((r, i) => {
+    const y = P.t + i * 26;
+    const label = el("text", {x: P.l - 10, y: y + 15, "text-anchor": "end",
+      fill: "var(--text-2)", "font-size": 12, "font-weight": 550});
+    label.textContent = r.coin;               // direct label: identity is never colour-alone
+    svg.append(label);
+
+    // current (recessive) then target (solid), 2px gap between the two marks
+    const bars = [
+      {v: r.current, yy: y + 3, h: 7, op: .4},
+      {v: r.notional, yy: y + 12, h: 9, op: 1},
+    ];
+    for (const b of bars) {
+      if (!b.v) continue;
+      const w = Math.abs(scale(b.v));
+      if (w < 0.5) continue;
+      const x = b.v >= 0 ? mid : mid - w;
+      const rect = el("rect", {x, y: b.yy, width: w, height: b.h, rx: 4,
+        fill: b.v >= 0 ? "var(--long)" : "var(--short)", opacity: b.op});
+      rect.addEventListener("mousemove", (evt) => showTip(evt,
+        `<div class="t-title">${r.coin} ${r.side}</div>
+         <div class="t-row">target ${usd(r.notional)} (${pct(r.weight,2)} of equity)</div>
+         <div class="t-row">current ${usd(r.current)}</div>`));
+      rect.addEventListener("mouseleave", hideTip);
+      svg.append(rect);
+    }
+  });
+  const axis = el("text", {x: mid, y: H - 6, "text-anchor": "middle", fill: "var(--text-muted)", "font-size": 11});
+  axis.textContent = `short ← 0 → long   (max ${usd(max)})`;
+  svg.append(axis);
+}
+
+/* ---------- tables ---------- */
+function table(node, cols, rows, emptyMsg) {
+  if (!rows.length) { node.innerHTML = `<tbody><tr><td colspan="${cols.length}" class="empty">${emptyMsg}</td></tr></tbody>`; return; }
+  const head = `<thead><tr>${cols.map(c => `<th>${c.h}</th>`).join("")}</tr></thead>`;
+  const body = rows.map(r => `<tr>${cols.map(c => {
+    const v = c.f(r);
+    return `<td class="${c.c ? c.c(r) : ""}">${v}</td>`;
+  }).join("")}</tr>`).join("");
+  node.innerHTML = head + `<tbody>${body}</tbody>`;
+}
+
+/* ---------- render ---------- */
+function render() {
+  const s = SNAP;
+  if (!s) return;
+  const cfg = s.config, acct = s.account;
+
+  $("b-net").textContent = cfg.network;
+  const mode = $("b-mode");
+  mode.className = "badge " + (cfg.live ? "live" : "dry");
+  mode.textContent = cfg.live ? "LIVE — real money" : "DRY RUN — simulated";
+
+  // banners
+  const banners = [];
+  if (s.risk && s.risk.kill_switch)
+    banners.push(`<div class="banner crit"><strong>Kill switch tripped.</strong> ${s.risk.reason}. Opening trades are blocked until the UTC day rolls over; risk-reducing orders still run.</div>`);
+  if (s.error) banners.push(`<div class="banner warn">${s.error}</div>`);
+  if (!cfg.account) banners.push(`<div class="banner warn">No account address set — discovery only. Set <code>HYPERLIQUID_ACCOUNT_ADDRESS</code> to track positions and mirror leaders.</div>`);
+  else if (!cfg.live && cfg.blockers.length)
+    banners.push(`<div class="banner warn"><strong>Simulator.</strong> Orders are computed and logged, never sent. Blocked by: ${cfg.blockers.join("; ")}.</div>`);
+  $("banners").innerHTML = banners.join("");
+
+  // tiles
+  const tiles = [];
+  if (acct) {
+    tiles.push({l: "Equity", v: usd(acct.equity), s: shortAddr(cfg.account)});
+    tiles.push({l: "Day P&L", v: signedUsd(acct.day_pnl), s: signedPct(acct.day_pnl_pct), c: cls(acct.day_pnl)});
+    tiles.push({l: "Unrealised", v: signedUsd(acct.unrealized), s: `${s.positions.length} positions`, c: cls(acct.unrealized)});
+    tiles.push({l: "Gross exposure", v: usd(acct.gross), s: `${acct.leverage.toFixed(2)}× of ${cfg.max_gross}× cap`});
+  } else {
+    tiles.push({l: "Mode", v: "Discovery", s: "no account tracked"});
+  }
+  tiles.push({l: "Leaders", v: String(s.roster.length), s: `${cfg.roster_mode} · ${(cfg.exposure_multiplier*100).toFixed(0)}% exposure`});
+  tiles.push({l: "Pending orders", v: String(s.adjustments.length), s: cfg.engine_running ? "engine running" : "engine idle"});
+  $("tiles").innerHTML = tiles.map(t => `<div class="tile">
+      <div class="label">${t.l}</div>
+      <div class="value ${t.c || ""}">${t.v}</div>
+      <div class="sub">${t.s || ""}</div></div>`).join("");
+
+  try { drawEquity(s.equity_series); } catch (e) { console.error("equity chart:", e); }
+  try { drawExposure(s.targets); } catch (e) { console.error("exposure chart:", e); }
+
+  $("pos-hint").textContent = acct ? `${usd(acct.gross)} gross · ${acct.leverage.toFixed(2)}× leverage` : "";
+  table($("positions"), [
+    {h: "Coin", f: r => `<strong>${r.coin}</strong>`},
+    {h: "Side", f: r => `<span class="pill ${r.side.toLowerCase()}">${r.side}</span>`},
+    {h: "Size", f: r => `<span class="num">${num(Math.abs(r.size))}</span>`},
+    {h: "Entry", f: r => `<span class="num">${num(r.entry)}</span>`},
+    {h: "Mark", f: r => `<span class="num">${num(r.mark)}</span>`},
+    {h: "Notional", f: r => `<span class="num">${usd(Math.abs(r.notional))}</span>`},
+    {h: "uPnL", f: r => `<span class="num">${signedUsd(r.upnl)}</span>`, c: r => cls(r.upnl)},
+    {h: "Lev", f: r => `<span class="num">${num(r.leverage,2)}×</span>`},
+    {h: "Liq", f: r => `<span class="num">${r.liquidation ? num(r.liquidation) : "—"}</span>`},
+  ], s.positions, "No open positions.");
+
+  table($("adjustments"), [
+    {h: "Coin", f: r => `<strong>${r.coin}</strong>`},
+    {h: "Action", f: r => `<span class="pill">${r.kind.toUpperCase()}</span>`},
+    {h: "Current", f: r => `<span class="num">${usd(r.current)}</span>`},
+    {h: "Target", f: r => `<span class="num">${usd(r.target)}</span>`},
+    {h: "Delta", f: r => `<span class="num">${signedUsd(r.delta)}</span>`},
+  ], s.adjustments, "In sync — nothing outside the deadband.");
+
+  const traders = ROSTER_TAB === "elite" ? s.elite : s.rising;
+  table($("traders"), [
+    {h: "Trader", f: r => `<span class="mono">${shortAddr(r.address)}</span>`},
+    {h: "Score", f: r => `<strong class="num">${(ROSTER_TAB==="elite"?r.elite:r.rising).toFixed(1)}</strong>`},
+    {h: "Perp capital", f: r => `<span class="num">${usd(r.perp_capital)}</span>`},
+    {h: "ROI /mo", f: r => `<span class="num">${pct(r.roi_month)}</span>`, c: r => cls(r.roi_month)},
+    {h: "Max DD", f: r => `<span class="num">${pct(r.max_drawdown)}</span>`},
+    {h: "R²", f: r => `<span class="num">${r.r_squared.toFixed(2)}</span>`},
+    {h: "Consistency", f: r => `<span class="num">${pct(r.consistency,0)}</span>`},
+    {h: "Pace", f: r => `<span class="num">${r.pace_ratio.toFixed(2)}×</span>`},
+    {h: "Days", f: r => `<span class="num">${r.days_active.toFixed(0)}</span>`},
+  ], traders, "No traders ranked yet — press “Rescan traders”.");
+
+  $("roster-hint").textContent = s.roster.length ? `${s.roster.length} leaders · ${cfg.roster_mode}` : "";
+  table($("roster"), [
+    {h: "Trader", f: r => `<span class="mono">${shortAddr(r.address)}</span>`},
+    {h: "Roster", f: r => `<span class="pill">${r.source}</span>`},
+    {h: "Allocation", f: r => `<span class="num">${pct(r.allocation,1)}</span>`},
+    {h: "Address", f: r => `<span class="mono" style="color:var(--text-muted)">${r.address}</span>`},
+  ], s.roster, "No roster — press “Rescan traders”.");
+
+  table($("orders"), [
+    {h: "Time", f: r => `<span class="num">${clock(r.ts)}</span>`},
+    {h: "Coin", f: r => `<strong>${r.coin}</strong>`},
+    {h: "Side", f: r => `<span class="pill ${r.side==="BUY"?"long":"short"}">${r.side}</span>`},
+    {h: "Size", f: r => `<span class="num">${num(r.size)}</span>`},
+    {h: "Price", f: r => `<span class="num">${num(r.price)}</span>`},
+    {h: "Notional", f: r => `<span class="num">${usd(r.notional)}</span>`},
+    {h: "Status", f: r => `<span class="pill">${r.status}</span>`},
+  ], s.orders, "No orders yet.");
+
+  $("btn-flatten").disabled = !s.positions.length;
+  $("btn-scan").disabled = cfg.scan_status === "running";
+  $("btn-scan").textContent = cfg.scan_status === "running" ? "Scanning…" : "Rescan traders";
+}
+
+function renderFeed(events) {
+  $("feed").innerHTML = events.length
+    ? events.slice().reverse().map(e => `<div class="ev ${e.severity}">
+        <time>${clock(e.ts)}</time>
+        <div class="ev-body">
+          <div class="ev-title">${e.title}</div>
+          ${e.body ? `<div class="ev-detail">${e.body}</div>` : ""}
+        </div></div>`).join("")
+    : `<div class="empty">Waiting for activity…</div>`;
+}
+
+/* ---------- data ---------- */
+async function poll() {
+  try {
+    const r = await fetch("/api/snapshot");
+    SNAP = await r.json();
+    render();
+    if (SNAP.events) renderFeed(SNAP.events);
+  } catch (e) { /* server restarting; the next tick retries */ }
+}
+
+let EVENTS = [];
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const conn = $("b-conn");
+  ws.onopen = () => { conn.className = "badge"; conn.innerHTML = '<span class="dot" style="color:var(--up)"></span> connected'; };
+  ws.onclose = () => {
+    conn.className = "badge"; conn.innerHTML = '<span class="dot pulse" style="color:var(--warn)"></span> reconnecting';
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.type === "hello") { EVENTS = msg.events || []; renderFeed(EVENTS); }
+    else if (msg.type === "event") { EVENTS.push(msg); EVENTS = EVENTS.slice(-200); renderFeed(EVENTS); }
+    else if (msg.type === "scan") { poll(); }
+  };
+}
+
+/* ---------- actions ---------- */
+$("btn-scan").onclick = async () => {
+  $("btn-scan").disabled = true;
+  await fetch("/api/scan", {method: "POST"});
+  poll();
+};
+$("btn-flatten").onclick = async () => {
+  if (!confirm("Close every open position with reduce-only orders?\n\nIn dry run these are simulated.")) return;
+  const r = await fetch("/api/flatten", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({confirm: "FLATTEN"}),
+  });
+  const out = await r.json();
+  alert(out.message || "done");
+  poll();
+};
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.setAttribute("aria-selected", String(x === t)));
+  ROSTER_TAB = t.dataset.roster;
+  render();
+});
+
+addEventListener("resize", () => { if (SNAP) { drawEquity(SNAP.equity_series); drawExposure(SNAP.targets); } });
+connect(); poll(); setInterval(poll, 5000);
+</script>
+</body>
+</html>

@@ -286,6 +286,25 @@ async def cmd_serve(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_snapshot(config: Config, args: argparse.Namespace) -> int:
+    """Export the dashboard as one self-contained HTML file (no server needed)."""
+    from .web.server import DashboardServer
+    from .web.snapshot import write
+
+    server = DashboardServer(config, run_engine=False)
+    async with InfoClient(
+        config.public_api_url, concurrency=config.discovery.concurrency
+    ) as info:
+        server.info = info
+        snapshot = await server.snapshot()
+    server.store.close()
+
+    out = write(snapshot, args.output)
+    print(f"\nwrote {out}  ({out.stat().st_size / 1024:.0f} KB)")
+    print("open it directly in a browser - it needs no server and places no orders")
+    return 0
+
+
 async def cmd_notify_test(config: Config, _: argparse.Namespace) -> int:
     dispatcher = build_dispatcher(config.notify)
     if not dispatcher.channels:
@@ -427,6 +446,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-browser", action="store_true", help="do not open a browser window",
     )
     serve.set_defaults(handler=cmd_serve)
+
+    snapshot = subparsers.add_parser(
+        "snapshot", help="export the dashboard as a standalone HTML file"
+    )
+    snapshot.add_argument(
+        "-o", "--output", default="desk-snapshot.html", help="output path"
+    )
+    snapshot.set_defaults(handler=cmd_snapshot)
 
     notify = subparsers.add_parser("notify-test", help="send a test notification")
     notify.set_defaults(handler=cmd_notify_test)

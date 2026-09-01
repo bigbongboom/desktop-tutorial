@@ -31,6 +31,22 @@ log = get_logger("web")
 DASHBOARD = Path(__file__).parent / "dashboard.html"
 
 
+class StoreChannel(Channel):
+    """Persists every notification, so the feed survives a restart.
+
+    Without this the event history lives only in the running process: restarting
+    the server emptied the feed, and an exported snapshot carried no events at all.
+    """
+
+    name = "store"
+
+    def __init__(self, store: Store):
+        self.store = store
+
+    async def send(self, event: Event) -> None:
+        self.store.record_event(event.severity.name, event.title, event.body)
+
+
 class WebChannel(Channel):
     """Notification transport that pushes into every connected browser."""
 
@@ -86,6 +102,24 @@ class DashboardServer:
         self._scan_task: asyncio.Task | None = None
         self._scan_status = "idle"
         self._started = utc_now()
+        self._seed_history()
+
+    def _seed_history(self) -> None:
+        """Show what happened before this process started."""
+        try:
+            self.hub.history = [
+                {
+                    "type": "event",
+                    "ts": row["ts_ms"],
+                    "severity": row["severity"],
+                    "title": row["title"],
+                    "body": row["body"] or "",
+                    "fields": {},
+                }
+                for row in self.store.recent_events(self.hub.limit)
+            ]
+        except Exception as exc:  # noqa: BLE001 - an empty feed is not fatal
+            log.debug("could not seed event history: %s", exc)
 
     # ---- snapshot --------------------------------------------------------- #
 
@@ -422,6 +456,7 @@ async def serve(
     server = DashboardServer(config, run_engine=run_engine)
     dispatcher = build_dispatcher(config.notify)
     dispatcher.add(WebChannel(server.hub))
+    dispatcher.add(StoreChannel(server.store))
 
     async with InfoClient(
         config.public_api_url, concurrency=config.discovery.concurrency

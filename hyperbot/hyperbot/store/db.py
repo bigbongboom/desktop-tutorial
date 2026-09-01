@@ -184,3 +184,13 @@ class Store:
             (now_ms(), severity, title, body),
         )
         self.connection.commit()
+
+    def recent_events(self, limit: int = 60) -> list[sqlite3.Row]:
+        """Newest last, so the feed reads in chronological order."""
+        rows = list(
+            self.connection.execute(
+                "SELECT ts_ms,severity,title,body FROM events ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+        )
+        return list(reversed(rows))

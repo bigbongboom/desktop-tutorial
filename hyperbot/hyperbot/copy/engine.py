@@ -90,10 +90,15 @@ class CopyEngine:
         )
         weights = allocations(chosen, mode=copy_config.allocation)
 
+        # Persist EVERY qualifier, not just the chosen leaders: the dashboard's
+        # "Top traders" / "On the come up" tables read from here, and saving only
+        # the roster left them showing 5 rows out of ~77 that qualified.
+        for trader in result.elite + result.rising:
+            self.store.save_trader(trader)
+
         previous = set(self.leaders)
         self.leaders = {}
         for trader in chosen:
-            self.store.save_trader(trader)
             source = "rising" if trader.rising.total >= trader.elite.total else "elite"
             self.leaders[trader.address.lower()] = Leader(
                 address=trader.address.lower(),

@@ -223,6 +223,16 @@ Also worth knowing:
   month's. A raw difference is meaningless across this population — an account up 1200% on
   the month shows an "acceleration" of −500 points while still compounding beautifully.
 
+## Share what you see
+
+```bash
+python run.py snapshot -o desk.html
+```
+
+Writes the whole dashboard - charts, tables, feed - into one self-contained HTML file with
+the data baked in. No server, no dependencies, no orders: open it from disk, email it, host
+it anywhere. Handy for keeping a record of what the desk looked like at a moment.
+
 ## If the dashboard will not load
 
 | What you see | What it means |

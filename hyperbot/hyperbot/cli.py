@@ -264,7 +264,13 @@ async def cmd_serve(config: Config, args: argparse.Namespace) -> int:
             signal.signal(sig, request_stop)
 
     task = asyncio.create_task(
-        serve(config, args.host, args.port, run_engine=not args.no_engine)
+        serve(
+            config,
+            args.host,
+            args.port,
+            run_engine=not args.no_engine,
+            open_browser=not args.no_browser,
+        )
     )
     done, _ = await asyncio.wait(
         {task, asyncio.create_task(stop.wait())}, return_when=asyncio.FIRST_COMPLETED
@@ -416,6 +422,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--no-engine", action="store_true",
         help="dashboard only - do not run the copy engine",
+    )
+    serve.add_argument(
+        "--no-browser", action="store_true", help="do not open a browser window",
     )
     serve.set_defaults(handler=cmd_serve)
 

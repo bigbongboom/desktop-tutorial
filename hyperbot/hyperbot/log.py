@@ -30,6 +30,13 @@ def setup_logging(level: str = "INFO", log_file: str | None = None) -> None:
     global _CONFIGURED
     if _CONFIGURED:
         return
+
+    # Windows consoles default to cp1252/cp437 and raise UnicodeEncodeError on
+    # characters this bot prints ("—", "²", "…"). Same guard as bot/trader.py.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - not a tty, or an old Python; harmless
+        pass
     root = logging.getLogger("hyperbot")
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     root.propagate = False

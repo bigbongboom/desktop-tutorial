@@ -409,7 +409,14 @@ def build_app(server: DashboardServer, dispatcher: Dispatcher) -> web.Applicatio
     return app
 
 
-async def serve(config: Config, host: str, port: int, *, run_engine: bool = True) -> None:
+async def serve(
+    config: Config,
+    host: str,
+    port: int,
+    *,
+    run_engine: bool = True,
+    open_browser: bool = True,
+) -> None:
     from ..notify.dispatcher import build_dispatcher
 
     server = DashboardServer(config, run_engine=run_engine)
@@ -435,6 +442,15 @@ async def serve(config: Config, host: str, port: int, *, run_engine: bool = True
         if host not in ("127.0.0.1", "localhost"):
             log.warning("bound to %s - this UI can place orders. Do not expose it.", host)
         log.info("=" * 62)
+
+        if open_browser:
+            # Best effort: headless boxes and WSL often have no browser to open.
+            try:
+                import webbrowser
+
+                webbrowser.open(url)
+            except Exception:  # noqa: BLE001
+                pass
 
         if run_engine and config.account_address:
             server.engine = CopyEngine(config, info, exchange, dispatcher, server.store)

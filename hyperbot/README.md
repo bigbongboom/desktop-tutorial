@@ -53,15 +53,28 @@ climber-band accounts are never even fetched.
 
 ## Quick start — the dashboard
 
+**Windows:** double-click **`start.bat`**
+**macOS / Linux:** run **`./start.sh`**
+
+That is the whole setup. It finds Python, installs what is missing, creates your config on
+first run, starts the server and opens the dashboard for you.
+
+Prefer to do it by hand:
+
 ```bash
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
 cp .env.example .env            # optional: notifications, and later a key
 
-python run.py serve
+python run.py serve             # on Windows this is `python`, not `python3`
 ```
 
 Then open **http://localhost:8730**.
+
+> **`localhost` means *your own computer*.** The link only works while the server is
+> running on the machine you are browsing from, and only for as long as that window stays
+> open. If the page will not load, the server is not running — that is almost always all it
+> is. Closing the terminal stops it.
 
 That one command runs everything: it scans and ranks traders, picks a roster, starts the
 copy engine in dry-run, and serves a live dashboard — equity chart, open positions,
@@ -209,6 +222,21 @@ Also worth knowing:
 - **Pace ratio** replaces raw acceleration: this week's pace as a *multiple* of the
   month's. A raw difference is meaningless across this population — an account up 1200% on
   the month shows an "acceleration" of −500 points while still compounding beautifully.
+
+## If the dashboard will not load
+
+| What you see | What it means |
+|---|---|
+| "This site can't be reached" / connection refused | The server is not running. Start `start.bat` / `./start.sh` and leave that window open. |
+| `'python' is not recognized` (Windows) | Python is not on your PATH. Reinstall from python.org and tick **"Add python.exe to PATH"**. |
+| `python3: command not found` (Windows) | On Windows the command is `python` or `py -3`, not `python3`. |
+| `ModuleNotFoundError: No module named 'aiohttp'` | Dependencies are missing: `pip install -r requirements.txt`. |
+| `address already in use` | Something already holds the port: `python run.py serve --port 9000`. |
+| Page loads but everything is empty | Normal on the very first run - the opening scan takes ~30s. Watch the terminal. |
+| Page loads but no positions | No `HYPERLIQUID_ACCOUNT_ADDRESS` in `.env`, so it runs discovery-only. |
+
+The terminal running the server prints the real error. If something is wrong, that is where
+it says so.
 
 ## Tests
 

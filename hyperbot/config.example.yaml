@@ -1,0 +1,92 @@
+# hyperbot configuration. Copy to config.yaml and edit.
+# SECRETS ARE NEVER READ FROM THIS FILE - they come from the environment (.env).
+
+network: testnet          # testnet | mainnet   (public reads always use mainnet)
+dry_run: true             # LOCK 1 of 3: false = orders are actually sent
+i_understand_live_trading_risk: false   # LOCK 2 of 3
+                          # LOCK 3 is HYPERLIQUID_PRIVATE_KEY in the environment
+log_level: INFO
+log_file: hyperbot.log
+db_path: hyperbot.db
+
+# ---------------------------------------------------------------------------
+# Who to follow
+# ---------------------------------------------------------------------------
+discovery:
+  # Stage 1: cheap filters over ~44k leaderboard rows.
+  min_account_value: 10000
+  max_account_value: 500000000
+  min_all_time_pnl: 5000
+  min_volume: 250000
+
+  # Stage 2: how many survivors get a full equity-curve fetch (2 requests each).
+  # This is the main knob on scan time: 300 takes roughly 25 seconds.
+  deep_scan_limit: 300
+  rising_scan_share: 0.40   # share of that budget reserved for the climber funnel
+  concurrency: 8
+
+  # Quality floors applied to both rosters.
+  min_days_active: 21
+  max_drawdown: 0.35
+  min_consistency: 0.45
+  min_r_squared: 0.30       # curve linearity: skill draws a straight-ish line
+  max_concentration: 0.70   # max share of profit from a single period
+  max_turnover: 400         # volume / equity - flags churn and wash trading
+
+  # The "on the come up" climber band, measured on PERP capital.
+  rising_min_equity: 10000
+  rising_max_equity: 2000000
+  rising_max_drawdown: 0.25
+  rising_min_consistency: 0.50
+  rising_min_r_squared: 0.40
+  rising_min_pace_ratio: 0.25   # this week's pace vs the month's; 1.0 = matching
+  rising_min_days_active: 21
+
+  refresh_minutes: 360      # re-scan and re-select the roster every 6 hours
+
+# ---------------------------------------------------------------------------
+# How to copy them
+# ---------------------------------------------------------------------------
+copy:
+  enabled: true
+  roster: blend             # elite | rising | blend
+  max_leaders: 5
+  rising_slots: 2           # of max_leaders, reserved for climbers
+  allocation: score         # equal | score
+  manual_leaders: []        # explicit addresses; overrides discovery entirely
+
+  # Fraction of each leader's position weight to take. 0.25 means if they are
+  # 40% long ETH, you go 10% long ETH. Above 1.0 you take MORE risk than they do.
+  exposure_multiplier: 0.25
+  deadband_pct: 0.02        # ignore diffs under 2% of equity - stops fee churn
+  min_order_usd: 12
+  reconcile_seconds: 45
+  fill_trigger: true        # a leader's fill wakes the loop early
+  close_orphans: true       # flatten coins no leader holds any more
+
+# ---------------------------------------------------------------------------
+# Risk envelope - evaluated before every order
+# ---------------------------------------------------------------------------
+risk:
+  max_gross_exposure: 3.0       # x equity, across all positions
+  max_position_pct: 0.50        # x equity, per coin
+  max_leverage: 5.0
+  max_concurrent_positions: 8
+  daily_loss_limit: 0.10        # kill switch, sticky until UTC rollover
+  max_drawdown_limit: 0.25      # kill switch, from high-water mark
+  min_account_value: 50
+  slippage_bps: 30              # IOC guard: never fills worse than this
+  coin_allowlist: []            # empty = all coins allowed
+  coin_denylist: []
+  flatten_on_kill: false        # true = close everything when the switch trips
+  use_isolated_margin: false
+
+# ---------------------------------------------------------------------------
+# Notifications  (tokens come from the environment)
+# ---------------------------------------------------------------------------
+notify:
+  console: true
+  min_severity: INFO        # INFO | TRADE | WARN | CRITICAL
+  cooldown_seconds: 60      # same event key fires at most once per window
+  daily_summary_hour_utc: 0
+  webhook_url: ""           # optional generic JSON webhook

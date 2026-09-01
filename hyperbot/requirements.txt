@@ -1,0 +1,7 @@
+# Core — needed for scan / rank / watch (no key required)
+httpx>=0.27.0
+websockets>=12.0
+PyYAML>=6.0
+
+# Live trading — order signing. Not needed for discovery or dry-run.
+hyperliquid-python-sdk>=0.9.0

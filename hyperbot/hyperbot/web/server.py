@@ -160,7 +160,7 @@ class DashboardServer:
             "risk": self._risk(),
             "research": self.store.load_dossiers(60),
             "consensus": self.store.load_consensus(),
-            "paper": self._paper_summary(),
+            "paper": await self._paper_summary(),
             "paper_equity": self.store.paper_equity_series(400),
         }
 
@@ -268,15 +268,34 @@ class DashboardServer:
         ]
         return data
 
-    def _paper_summary(self) -> dict[str, Any] | None:
-        engine = self.engine
-        if engine is None or engine.paper is None or self.info is None:
+    async def _paper_summary(self) -> dict[str, Any] | None:
+        """Summarise the paper account.
+
+        Reads it from the store when no engine is running, so an exported
+        snapshot still carries the test result - the whole point of the run.
+        """
+        if self.info is None:
             return None
+        broker = self.engine.paper if self.engine else None
+        if broker is None:
+            if not self.config.paper.enabled:
+                return None
+            saved = self.store.load_paper()
+            if not saved:
+                return None
+            from ..paper.broker import PaperBroker
+
+            broker = PaperBroker.from_dict(
+                saved,
+                taker_fee_bps=self.config.paper.taker_fee_bps,
+                slippage_bps=self.config.paper.slippage_bps,
+            )
         try:
-            marks = {c: a.mark_price for c, a in self.info._meta_cache.items()}
-        except Exception:  # noqa: BLE001
+            meta = await self.info.asset_meta()
+            marks = {coin: asset.mark_price for coin, asset in meta.items()}
+        except Exception:  # noqa: BLE001 - fall back to entry prices
             marks = {}
-        return engine.paper.summary(marks)
+        return broker.summary(marks)
 
     def _risk(self) -> dict[str, Any]:
         if not self.engine:

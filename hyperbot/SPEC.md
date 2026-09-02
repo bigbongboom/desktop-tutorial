@@ -223,6 +223,29 @@ against the raw feed.
 Backtests evaluate **our reconstruction** of an inferred pattern, never the trader's
 strategy, and the UI states that where the numbers appear.
 
+## 8d. Positioning consensus (`research/consensus.py`)
+
+Ranks coins by agreement across the researched accounts, weighted per side by
+`quality_weight()` — a trader who is 92% on longs does not lend that record to a short.
+Scoring is multiplicative over breadth x agreement x track record x conviction, so a single
+large position scores zero without corroboration.
+
+Built on **live positioning**, not on same-day fills, because same-day fills are usually
+absent: of 16 well-scored accounts only 3 traded within 24h, the median had not traded for
+4.5 days, and a UTC-day window at 04:00 returned nothing at all. Flow is secondary, over a
+window that widens 24h -> 72h -> 7d until `MIN_ACCOUNTS_FOR_FLOW` accounts are inside it,
+and the window used is always reported.
+
+Two artefacts are surfaced rather than hidden:
+
+- `one_sided_cohort` — live data had 95% of all positions long. Discovery selects on
+  realised profit, so a trending market yields a long-biased cohort whose agreement is
+  near-tautological.
+- crowded-but-weak — high breadth with low measured quality is named in the rationale.
+
+The consensus refreshes on `discovery.research_refresh_minutes` (default 20) so the panel
+does not silently age while the page looks live.
+
 ## 9. Safety locks on live trading
 
 Live orders require **three independent switches**, all off by default:

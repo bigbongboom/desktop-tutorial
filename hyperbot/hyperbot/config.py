@@ -59,6 +59,8 @@ class DiscoveryConfig:
     rising_min_days_active: int = 21
 
     refresh_minutes: int = 360
+    # How often to re-study accounts and recompute the positioning consensus.
+    research_refresh_minutes: int = 20
 
 
 @dataclass

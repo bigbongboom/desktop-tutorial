@@ -43,6 +43,7 @@ discovery:
   rising_min_days_active: 21
 
   refresh_minutes: 360      # re-scan and re-select the roster every 6 hours
+  research_refresh_minutes: 20  # re-study accounts + refresh the consensus
 
 # ---------------------------------------------------------------------------
 # How to copy them

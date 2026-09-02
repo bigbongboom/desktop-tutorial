@@ -67,6 +67,7 @@ cp config.example.yaml config.yaml
 cp .env.example .env            # optional: notifications, and later a key
 
 python run.py serve             # on Windows this is `python`, not `python3`
+python run.py signals           # positioning consensus in the terminal
 ```
 
 Then open **http://localhost:8730**.
@@ -222,6 +223,39 @@ Also worth knowing:
 - **Pace ratio** replaces raw acceleration: this week's pace as a *multiple* of the
   month's. A raw difference is meaningless across this population — an account up 1200% on
   the month shows an "acceleration" of −500 points while still compounding beautifully.
+
+## Where the tracked traders are positioned
+
+The panel at the top of the dashboard (`python run.py signals` in the terminal) ranks coins
+by how strongly the researched accounts agree, weighted by how well each of them has
+actually done **on that side**.
+
+**It is built on live positioning, not on "today's trades" — for a measured reason.** The
+obvious version is "what did the good traders buy today", and that question usually has no
+answer. Sampling 16 well-scored accounts: only 3 had traded in the last 24 hours, the median
+account had not traded for 4.5 days, and at 04:00 UTC a calendar-day window returned zero
+fills for every one of them. A signal resting on three accounts — or on none — is worse than
+no signal. So current positioning is the primary reading (live for every account, always),
+and recent flow is secondary, over a window that widens 24h → 72h → 7d until enough accounts
+are inside it. Every result states the window it used and how many accounts were in it.
+
+Each coin shows: how many accounts hold it and which way, their agreement, their average
+position as a share of *their own* equity, a **track-record weight** for that side, and net
+flow in the window. Ranking is multiplicative — one whale with a huge position cannot
+outrank four good traders who agree.
+
+Two honesty features do real work here:
+
+- **The cohort warning.** On live data, 95% of every position these accounts held was long.
+  That is a property of *who got selected*, not of the market: discovery ranks accounts on
+  realised profit, so in a rising market it picks long-biased traders and their "consensus"
+  is long almost by construction. The page says so above the table.
+- **"Crowded, but not evidence."** HYPE was held long by 10 of the tracked accounts — the
+  broadest agreement on the board — by accounts whose measured record on that side was poor
+  (0.33). Breadth and skill are shown separately so a crowd cannot masquerade as a signal.
+
+It is not a forecast and not advice. You would be entering after they did, at a worse price,
+paying your own fees and funding, and these accounts can be wrong together.
 
 ## Trader research — the leaderboard
 

@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS dossiers (
     payload TEXT,
     updated_ms INTEGER
 );
+CREATE TABLE IF NOT EXISTS consensus (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT,
+    updated_ms INTEGER
+);
 CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts_ms);
 CREATE INDEX IF NOT EXISTS idx_equity_day ON equity(day);
 """
@@ -225,6 +230,21 @@ class Store:
                 "SELECT payload FROM dossiers ORDER BY total_pnl DESC LIMIT ?", (limit,)
             )
         ]
+
+    def save_consensus(self, payload: dict) -> None:
+        self.connection.execute(
+            "INSERT INTO consensus (id,payload,updated_ms) VALUES (1,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, "
+            "updated_ms=excluded.updated_ms",
+            (json.dumps(payload), now_ms()),
+        )
+        self.connection.commit()
+
+    def load_consensus(self) -> dict | None:
+        row = self.connection.execute(
+            "SELECT payload FROM consensus WHERE id = 1"
+        ).fetchone()
+        return json.loads(row["payload"]) if row else None
 
     def dossier_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM dossiers").fetchone()[0])

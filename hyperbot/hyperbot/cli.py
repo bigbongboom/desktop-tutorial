@@ -333,6 +333,85 @@ async def cmd_research(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_signals(config: Config, args: argparse.Namespace) -> int:
+    """Where the researched accounts are positioned, and what they changed."""
+    import json as _json
+
+    from .research.analyst import gather_consensus
+    from .research.consensus import report_to_dict
+    from .research.profile import SideStats, TraderProfile
+
+    store = Store(config.db_path)
+    rows = store.load_dossiers(args.accounts)
+    if not rows:
+        print("nothing researched yet - run `hyperbot research` first")
+        return 1
+
+    def rebuild(payload: dict) -> TraderProfile:
+        """Enough of a profile to weight this account's opinion per side."""
+        stats, sides = payload.get("stats", {}), payload.get("sides", {})
+        profile = TraderProfile(address=payload["address"])
+        profile.trades = stats.get("orders", 0)
+        profile.wins = round(stats.get("win_rate", 0.0) * profile.trades)
+        profile.losses = profile.trades - profile.wins
+        profile.total_pnl = stats.get("total_pnl", 0.0)
+        profile.unrealized_pnl = stats.get("unrealized_pnl", 0.0)
+        for label in ("long", "short"):
+            raw = sides.get(label, {})
+            side = SideStats(label)
+            side.trades = raw.get("trades", 0)
+            side.wins = round(raw.get("win_rate", 0.0) * side.trades)
+            side.pnl = raw.get("pnl", 0.0)
+            side.volume = raw.get("volume", 0.0)
+            factor = raw.get("profit_factor")
+            if factor:
+                side.gross_win = abs(side.pnl) * 2
+                side.gross_loss = -abs(side.pnl) * 2 / max(factor, 0.01)
+            elif side.pnl > 0:
+                side.gross_win = side.pnl
+            setattr(profile, label, side)
+        return profile
+
+    accounts = [(r["address"], r.get("name", r["address"]), rebuild(r)) for r in rows]
+    async with InfoClient(config.public_api_url, concurrency=8) as info:
+        report = await gather_consensus(info, accounts)
+    store.save_consensus(report_to_dict(report))
+
+    print(f"\n{report.accounts_with_positions} of {report.accounts_considered} researched "
+          f"accounts hold positions.")
+    if report.has_flow:
+        print(f"Flow measured over the last {report.flow_window_hours}h "
+              f"({report.accounts_active_in_window} accounts traded in it).")
+    else:
+        print("Too few accounts traded recently to read flow - positions only.")
+    if report.cohort_warning:
+        print(f"\n  WARNING: {report.cohort_warning}")
+
+    print(f"\n{'score':>6} {'coin':<12} {'side':<6} {'held':>5} {'agree':>6} "
+          f"{'record':>7} {'avg size':>9} {'flow':>14}")
+    print("-" * 74)
+    for entry in report.top(args.limit):
+        print(f"{entry.score:>6.0f} {entry.coin.replace('xyz:', '')[:12]:<12} "
+              f"{entry.side:<6} {entry.holders:>5} {entry.agreement:>6.0%} "
+              f"{entry.quality:>7.2f} {entry.conviction:>8.0%} "
+              f"{usd(entry.flow_usd) if entry.flow_usd else '-':>14}")
+
+    for entry in report.top(min(args.limit, 5)):
+        print(f"\n{entry.coin.replace('xyz:', '')}: {entry.rationale()}")
+        for stance in entry.participants[:4]:
+            print(f"   {'LONG ' if stance.is_long else 'SHORT'} "
+                  f"{stance.position_fraction:>7.0%} of equity  "
+                  f"record {stance.quality:.2f} "
+                  f"({stance.side_win_rate:.0%} on {stance.side_trades} exits)  "
+                  f"{stance.name[:44]}")
+
+    print("\nThis is where measured traders have their money - not a forecast, not advice.")
+    if args.json:
+        print(_json.dumps(report_to_dict(report), indent=2))
+    store.close()
+    return 0
+
+
 async def cmd_snapshot(config: Config, args: argparse.Namespace) -> int:
     """Export the dashboard as one self-contained HTML file (no server needed)."""
     from .web.server import DashboardServer
@@ -501,6 +580,14 @@ def build_parser() -> argparse.ArgumentParser:
         "address", nargs="?", help="one address (default: the stored roster)"
     )
     research.set_defaults(handler=cmd_research)
+
+    signals = subparsers.add_parser(
+        "signals", help="where the researched accounts are positioned right now"
+    )
+    signals.add_argument("--limit", type=int, default=10, help="coins to show")
+    signals.add_argument("--accounts", type=int, default=40, help="accounts to include")
+    signals.add_argument("--json", action="store_true", help="also dump raw JSON")
+    signals.set_defaults(handler=cmd_signals)
 
     snapshot = subparsers.add_parser(
         "snapshot", help="export the dashboard as a standalone HTML file"

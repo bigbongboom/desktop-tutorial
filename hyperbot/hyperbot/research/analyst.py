@@ -9,6 +9,14 @@ from ..api.info import InfoClient
 from ..log import get_logger
 from ..util import safe_div
 from .candles import EntryContext, build_context, parse_candles
+from .consensus import (
+    FLOW_WINDOWS_HOURS,
+    MIN_ACCOUNTS_FOR_FLOW,
+    ConsensusReport,
+    Stance,
+    build_consensus,
+    quality_weight,
+)
 from .naming import build_description, build_name
 from .profile import TraderProfile, build_profile
 from .strategy import Archetype, BacktestResult, Fingerprint, backtest, classify, fingerprint
@@ -246,3 +254,113 @@ class Analyst:
 
         results = await asyncio.gather(*(one(a) for a in addresses))
         return [r for r in results if r is not None]
+
+
+# --------------------------------------------------------------------------- #
+# consensus across the tracked accounts
+# --------------------------------------------------------------------------- #
+
+
+async def gather_consensus(
+    info: InfoClient,
+    accounts: list[tuple[str, str, TraderProfile | None]],
+    *,
+    concurrency: int = 6,
+) -> ConsensusReport:
+    """Live positioning across `accounts`, plus flow over an adaptive window.
+
+    `accounts` is (address, display name, profile-or-None). The profile supplies
+    the per-side track record that weights each opinion; without one the account
+    still counts, at a low default weight.
+    """
+    import time as _time
+
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def state_of(address: str):
+        async with semaphore:
+            try:
+                return address, await info.account_state(address)
+            except Exception as exc:  # noqa: BLE001 - one bad account is not fatal
+                log.debug("state failed for %s: %s", address, exc)
+                return address, None
+
+    states = dict(await asyncio.gather(*(state_of(a) for a, _, _ in accounts)))
+
+    # Widen the flow window until enough accounts have actually traded inside it.
+    now_ms = int(_time.time() * 1000)
+    fills_by_address: dict[str, list] = {}
+    chosen_window = FLOW_WINDOWS_HOURS[-1]
+    for window in FLOW_WINDOWS_HOURS:
+        start = now_ms - window * 3_600_000
+
+        async def fills_of(address: str):
+            async with semaphore:
+                try:
+                    return address, await info.user_fills_by_time(address, start)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("fills failed for %s: %s", address, exc)
+                    return address, []
+
+        fills_by_address = dict(
+            await asyncio.gather(*(fills_of(a) for a, _, _ in accounts))
+        )
+        active = sum(1 for f in fills_by_address.values() if f)
+        chosen_window = window
+        if active >= MIN_ACCOUNTS_FOR_FLOW:
+            break
+    active_accounts = sum(1 for f in fills_by_address.values() if f)
+    log.info(
+        "consensus: flow window %dh covers %d active accounts",
+        chosen_window, active_accounts,
+    )
+
+    profiles = {address: profile for address, _, profile in accounts}
+    names = {address: name for address, name, _ in accounts}
+
+    stances_by_coin: dict[str, list[Stance]] = {}
+    with_positions = 0
+    for address, state in states.items():
+        if state is None or not state.positions or state.account_value <= 0:
+            continue
+        with_positions += 1
+        profile = profiles.get(address)
+
+        # Net notional traded per coin inside the window, signed by direction.
+        flow: dict[str, float] = {}
+        for fill in fills_by_address.get(address, []):
+            direction = fill.direction or ""
+            signed = 1.0 if fill.is_buy else -1.0
+            flow[fill.coin] = flow.get(fill.coin, 0.0) + signed * fill.notional
+
+        for coin, position in state.positions.items():
+            is_long = position.is_long
+            stances_by_coin.setdefault(coin, []).append(
+                Stance(
+                    address=address,
+                    name=names.get(address, address),
+                    is_long=is_long,
+                    position_fraction=position.signed_notional / state.account_value,
+                    notional=position.signed_notional,
+                    leverage=position.leverage,
+                    unrealized=position.unrealized_pnl,
+                    quality=quality_weight(profile, is_long),
+                    side_win_rate=(
+                        (profile.long if is_long else profile.short).win_rate
+                        if profile else 0.0
+                    ),
+                    side_trades=(
+                        (profile.long if is_long else profile.short).trades
+                        if profile else 0
+                    ),
+                    flow_usd=flow.get(coin, 0.0),
+                )
+            )
+
+    return build_consensus(
+        stances_by_coin,
+        accounts_considered=len(accounts),
+        accounts_with_positions=with_positions,
+        accounts_active=active_accounts,
+        flow_window_hours=chosen_window,
+    )

@@ -163,6 +163,24 @@ tbody tr:hover { background: var(--surface-2); }
 .ev.TRADE .ev-title { color: var(--accent); }
 .ev.WARN .ev-title { color: var(--warn); }
 .ev.CRITICAL .ev-title { color: var(--critical); }
+/* ---- consensus ---- */
+.cons { display: grid; gap: 10px; }
+.cons-row { display: grid; grid-template-columns: 92px 62px 1fr auto; gap: 14px;
+            align-items: start; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.cons-row:last-child { border-bottom: none; }
+.cons-coin { font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
+.cons-coin small { display: block; font-weight: 400; font-size: 11px; color: var(--text-muted); }
+.cons-side { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 6px; text-align: center; }
+.cons-side.LONG { background: color-mix(in srgb, var(--long) 15%, transparent); color: var(--long); }
+.cons-side.SHORT { background: color-mix(in srgb, var(--short) 15%, transparent); color: var(--short); }
+.cons-side.SPLIT { background: var(--surface-2); color: var(--text-2); }
+.cons-why { font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
+.cons-who { margin-top: 5px; font-size: 11.5px; color: var(--text-muted); }
+.cons-metrics { display: flex; gap: 14px; font-size: 11px; color: var(--text-muted); text-align: right; }
+.cons-metrics b { display: block; font-size: 13px; color: var(--text); font-weight: 600; }
+.meter { width: 54px; height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.meter i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
 /* ---- research leaderboard + drawer ---- */
 th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 th.sortable:hover { color: var(--text); }
@@ -235,6 +253,13 @@ tr.clickable:hover { background: var(--surface-2); }
   <div id="banners"></div>
 
   <section class="tiles" id="tiles"></section>
+
+  <div class="card" id="consensus-card">
+    <h2>Where the tracked traders are positioned
+      <span class="hint" id="cons-hint"></span>
+    </h2>
+    <div id="consensus"></div>
+  </div>
 
   <div class="grid two">
     <div class="card">
@@ -603,6 +628,7 @@ function render() {
     {h: "Status", f: r => `<span class="pill">${r.status}</span>`},
   ], s.orders, "No orders yet.");
 
+  try { renderConsensus(); } catch (e) { console.error("consensus:", e); }
   try { renderResearch(); } catch (e) { console.error("research table:", e); }
 
   const researching = cfg.research_status === "running";
@@ -625,6 +651,58 @@ function renderFeed(events) {
     : `<div class="empty">Waiting for activity…</div>`;
 }
 
+
+/* ---------- consensus ---------- */
+function renderConsensus() {
+  const node = $("consensus");
+  const c = SNAP && SNAP.consensus;
+  if (!c || !c.coins || !c.coins.length) {
+    node.innerHTML = `<div class="empty">No positioning data yet — run “Research traders”.</div>`;
+    $("cons-hint").textContent = "";
+    return;
+  }
+
+  const flow = c.has_flow
+    ? `flow measured over the last ${c.flow_window_hours}h (${c.accounts_active_in_window} accounts traded)`
+    : `too few accounts traded recently to read flow — positions only`;
+  $("cons-hint").textContent =
+    `${c.accounts_with_positions} of ${c.accounts_considered} accounts hold positions · ${flow}`;
+
+  const warn = c.cohort_warning
+    ? `<div class="banner warn" style="margin:14px 16px">${c.cohort_warning}</div>` : "";
+
+  const rows = c.coins.map(k => {
+    const who = k.participants.slice(0, 3).map(p =>
+      `${p.name.replace(/^High-Leverage /, "")} ${(p.position_fraction*100).toFixed(0)}%`
+    ).join(" · ");
+    const flowBit = k.flow_usd
+      ? `<div><b class="${k.flow_usd > 0 ? "pos" : "neg"}">${signedUsd(k.flow_usd)}</b>${k.flow_window ?? ""}flow</div>`
+      : `<div><b style="color:var(--text-muted)">—</b>flow</div>`;
+    return `<div class="cons-row">
+      <div><div class="cons-coin">${k.coin.replace(/^xyz:/, "")}
+             <small>${k.holders} account${k.holders === 1 ? "" : "s"}</small></div></div>
+      <div><div class="cons-side ${k.side}">${k.side}</div></div>
+      <div>
+        <div class="cons-why">${k.rationale}</div>
+        <div class="cons-who">${who}</div>
+      </div>
+      <div class="cons-metrics">
+        <div><b>${k.score.toFixed(0)}</b>score<div class="meter"><i style="width:${Math.min(100,k.score)}%"></i></div></div>
+        <div><b>${pct(k.agreement,0)}</b>agree</div>
+        <div><b>${k.quality.toFixed(2)}</b>track record<div class="meter"><i style="width:${(k.quality*100).toFixed(0)}%"></i></div></div>
+        ${flowBit}
+      </div>
+    </div>`;
+  }).join("");
+
+  node.innerHTML = warn + `<div class="cons">${rows}</div>
+    <div class="banner warn" style="margin:14px 16px 16px">
+      This is <strong>where measured traders have their money</strong>, not a forecast and
+      not advice. You would be entering after they did, at a worse price, paying your own
+      fees and funding. Agreement means these particular accounts agree — they can all be
+      wrong together, and the cohort was chosen for past profit.
+    </div>`;
+}
 
 /* ---------- trader research ---------- */
 let SORT = {key: "total_pnl", dir: -1};

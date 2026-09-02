@@ -21,7 +21,8 @@ from ..copy.engine import CopyEngine
 from ..copy.reconciler import reconcile
 from ..copy.sizing import LeaderView, build_target_book
 from ..discovery.scanner import TraderScanner, allocations, select_roster
-from ..research.analyst import Analyst
+from ..research.analyst import Analyst, gather_consensus
+from ..research.consensus import report_to_dict
 from ..log import get_logger
 from ..notify.dispatcher import Channel, Dispatcher, Event
 from ..store.db import Store
@@ -158,6 +159,7 @@ class DashboardServer:
             "events": self.hub.history[-60:],
             "risk": self._risk(),
             "research": self.store.load_dossiers(60),
+            "consensus": self.store.load_consensus(),
         }
 
         if not (self.info and config.account_address):
@@ -398,6 +400,14 @@ class DashboardServer:
                 dossiers = await Analyst(self.info).study_many(targets, concurrency=4)
                 for dossier in dossiers:
                     self.store.save_dossier(dossier.as_dict())
+
+                # Positioning consensus across everyone we just studied, using
+                # their measured per-side record to weight each opinion.
+                report = await gather_consensus(
+                    self.info,
+                    [(d.address, d.name, d.profile) for d in dossiers],
+                )
+                self.store.save_consensus(report_to_dict(report))
                 self._research_status = "idle"
                 log.info("research complete: %d dossiers", len(dossiers))
                 await self.hub.publish(
@@ -510,12 +520,31 @@ def build_app(server: DashboardServer, dispatcher: Dispatcher) -> web.Applicatio
 
 
 async def _auto_research(server: "DashboardServer") -> None:
-    """Kick off the deep research pass once the first scan has produced a roster."""
-    for _ in range(60):
+    """Keep the research and the positioning consensus current.
+
+    Runs once as soon as the first scan produces a roster, then repeats on a
+    timer. Positions move and accounts trade, so a consensus computed at startup
+    goes stale; without this the panel silently ages while the page looks live.
+    """
+    for _ in range(60):  # wait for the first roster
         await asyncio.sleep(5)
-        if server.store.dossier_count() == 0 and server._research_targets():
+        if server._research_targets():
+            break
+    else:
+        return
+
+    interval = max(300, server.config.discovery.research_refresh_minutes * 60)
+    while True:
+        try:
             await server.run_research()
-            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a failed pass must not end the loop
+            log.error("scheduled research failed: %s", exc)
+        # Wait for the pass to finish before timing the next one.
+        while server._research_status == "running":
+            await asyncio.sleep(5)
+        await asyncio.sleep(interval)
 
 
 async def serve(

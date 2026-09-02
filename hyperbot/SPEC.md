@@ -194,6 +194,35 @@ warns. Long/short use the blue/red diverging pair rather than green/red: same po
 and it stays readable with colour-vision deficiency (validated CVD dE 21.6 light /
 19.2 dark against an >= 8 target).
 
+## 8c. Trader research (`hyperbot/research/`)
+
+| Module | Job |
+|---|---|
+| `trades.py` | Fills -> exit events (one per closing **order**) and, where the opens are visible, flat-to-flat round trips via `startPosition` |
+| `profile.py` | Win rate, profit factor, expectancy, payoff, long/short split, activity, leverage band, sample quality |
+| `naming.py` | Deterministic behavioural handle + factual description |
+| `candles.py` | EMA/RSI/ATR and the entry context for each visible entry |
+| `strategy.py` | Aggregate fingerprint -> archetype, plus a no-lookahead backtest of the inferred rule |
+| `analyst.py` | Orchestrates one account end to end into a dossier |
+
+Three measured constraints drive the design, all verified on live accounts:
+
+- The fill feed caps at **2000 records**. Every statistic is window-bounded and says so.
+- That window can be **entirely closes** - one account returned 2000/2000 "Close Long" with
+  its opens outside the window, unrecoverable by paging. Hold time and entry analysis are
+  therefore optional and gated on `coverage`, never faked.
+- Positions **rarely return to flat** (3 crossings in 2000 fills on one account), so
+  flat-to-flat cannot be the definition of a trade.
+
+Hence the unit of realisation is the **closing order**. Grouping by fill would report 2000
+wins for six decisions; grouping by a time window merged wins with losses and manufactured a
+100% win rate. Settlement and spot legs carry real P&L but are not trading decisions, so
+they are excluded from win rate and reported separately - the totals reconcile exactly
+against the raw feed.
+
+Backtests evaluate **our reconstruction** of an inferred pattern, never the trader's
+strategy, and the UI states that where the numbers appear.
+
 ## 9. Safety locks on live trading
 
 Live orders require **three independent switches**, all off by default:

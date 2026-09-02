@@ -223,6 +223,54 @@ Also worth knowing:
   month's. A raw difference is meaningless across this population — an account up 1200% on
   the month shows an "acceleration" of −500 points while still compounding beautifully.
 
+## Trader research — the leaderboard
+
+`python run.py research` (or the **Research traders** button) reads each account's public
+fills and works out what they actually do. Every row on the leaderboard clicks through to a
+full breakdown.
+
+**What gets measured**
+
+- **Win rate by side.** Longs and shorts are scored separately, because they are usually
+  different skills. One account here is 29% and −$8.5k on longs while being 41% and
+  **+$118k on shorts** — a single blended win rate would have hidden that completely.
+- **Profit factor, expectancy, payoff ratio, average win vs average loss, fees.**
+- **A name and description** generated from behaviour: "High-Leverage BTC Two-Way Swing
+  Trader", plus a sentence of measured facts. These are behavioural labels from public
+  trading data - never a claim about who anybody is.
+- **How they enter**, by locating every visible entry on real candles: how often they were
+  with the trend, breaking out, or buying a pullback, their average RSI at entry, and how
+  far from the 20-EMA they typically got in.
+
+**The unit of a trade is one closing order.** This matters more than it sounds. One account
+returned 2000 fills that were all partial pieces of just six orders; treating each fill as a
+trade would report 2000 wins. Grouping by a 15-minute time window was worse - it merged
+wins with losses until every group looked positive, manufacturing a 100% win rate. Grouping
+by order id merges the 381 pieces of one unwind without merging two separate decisions.
+
+**Three things the API cannot give you, stated rather than papered over:**
+
+1. The fill feed caps at 2000 records, so every window is bounded and the page says how
+   many days it covers.
+2. For traders who unwind in pieces, those 2000 fills can be *entirely closes* - their
+   opening fills are outside the window and paging back does not recover them. Hold time
+   and entry analysis are then unavailable, and the page says so instead of inventing them.
+3. Positions rarely return to flat (one account crossed zero 3 times in 2000 fills), so
+   "trades" defined flat-to-flat would report almost nothing.
+
+**Backtests test our rule, not their strategy.** Where a pattern is clear enough to write
+down, it gets tested mechanically on the same market and period - entries on the next bar's
+open, stop checked before target so an ambiguous bar counts as a loss. This answers "does
+this pattern have an edge on its own", which is a different question from "is this trader
+good". For the dip-buyer above, our reconstruction returned +8.4% on one market and −0.3%
+on another while the trader themselves ran a 92% win rate; that gap is the honest answer,
+and it is why the two are never presented as the same claim.
+
+**Flags you will see:** `holds losers` marks an account whose realised record is spotless
+while its open book is under water - it closes winners and keeps losers, so the losses
+simply have not been taken yet. `thin` / `very thin` mark too few closing orders for the
+win rate to mean much.
+
 ## Share what you see
 
 ```bash

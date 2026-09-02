@@ -286,6 +286,53 @@ async def cmd_serve(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_research(config: Config, args: argparse.Namespace) -> int:
+    """Deep-dive one account, or every account on the stored roster."""
+    from .research.analyst import Analyst
+
+    store = Store(config.db_path)
+    if args.address:
+        targets = [args.address]
+    else:
+        targets = [row["address"] for row in store.load_roster()]
+        if not targets:
+            print("no roster stored - run `hyperbot scan` first, or pass an address")
+            return 1
+
+    async with InfoClient(config.public_api_url, concurrency=8) as info:
+        dossiers = await Analyst(info).study_many(targets, concurrency=4)
+
+    for dossier in dossiers:
+        store.save_dossier(dossier.as_dict())
+        profile = dossier.profile
+        assert profile
+        print("\n" + "=" * 78)
+        print(f"{dossier.name}   {dossier.address}")
+        print(f"  {dossier.description}")
+        pf = "n/a" if profile.profit_factor is None else f"{profile.profit_factor:.2f}"
+        print(f"\n  exits {profile.orders} | win {profile.win_rate:.0%} "
+              f"[{profile.sample_quality}] | PF {pf} | realised {usd(profile.total_pnl)}")
+        print(f"  long  {profile.long.trades:>4} exits  win {profile.long.win_rate:>5.0%}  "
+              f"{usd(profile.long.pnl)}")
+        print(f"  short {profile.short.trades:>4} exits  win {profile.short.win_rate:>5.0%}  "
+              f"{usd(profile.short.pnl)}")
+        if dossier.archetype:
+            print(f"\n  style: {dossier.archetype.name} "
+                  f"[{dossier.archetype.confidence} confidence]")
+            print(f"    {dossier.archetype.summary}")
+            for line in dossier.archetype.evidence:
+                print(f"      - {line}")
+        for test in dossier.backtests:
+            factor = "n/a" if test.profit_factor is None else f"{test.profit_factor:.2f}"
+            print(f"\n  backtest of OUR rule ({test.coin} {test.interval}): {test.rule}")
+            print(f"    {test.trades} trades | win {test.win_rate:.0%} | PF {factor} | "
+                  f"return {test.total_return:+.1%} | max DD {test.max_drawdown:.1%}")
+        for note in dossier.notes:
+            print(f"  note: {note}")
+    store.close()
+    return 0
+
+
 async def cmd_snapshot(config: Config, args: argparse.Namespace) -> int:
     """Export the dashboard as one self-contained HTML file (no server needed)."""
     from .web.server import DashboardServer
@@ -446,6 +493,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-browser", action="store_true", help="do not open a browser window",
     )
     serve.set_defaults(handler=cmd_serve)
+
+    research = subparsers.add_parser(
+        "research", help="deep-dive traders: win rate, sides, entry style, backtest"
+    )
+    research.add_argument(
+        "address", nargs="?", help="one address (default: the stored roster)"
+    )
+    research.set_defaults(handler=cmd_research)
 
     snapshot = subparsers.add_parser(
         "snapshot", help="export the dashboard as a standalone HTML file"

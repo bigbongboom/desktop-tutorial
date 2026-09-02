@@ -29,7 +29,7 @@ renderFeed(SNAP.events || []);
   const conn = document.getElementById("b-conn");
   conn.className = "badge";
   conn.textContent = "snapshot \\u00b7 " + BAKED_AT;
-  for (const id of ["btn-scan", "btn-flatten"]) {
+  for (const id of ["btn-scan", "btn-flatten", "btn-research"]) {
     const b = document.getElementById(id);
     b.disabled = true;
     b.title = "Actions need the live server (python run.py serve)";

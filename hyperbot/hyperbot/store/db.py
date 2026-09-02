@@ -72,6 +72,21 @@ CREATE TABLE IF NOT EXISTS events (
     title TEXT,
     body TEXT
 );
+CREATE TABLE IF NOT EXISTS dossiers (
+    address TEXT PRIMARY KEY,
+    name TEXT,
+    win_rate REAL,
+    orders INTEGER,
+    total_pnl REAL,
+    long_pnl REAL,
+    short_pnl REAL,
+    long_win_rate REAL,
+    short_win_rate REAL,
+    max_leverage REAL,
+    archetype TEXT,
+    payload TEXT,
+    updated_ms INTEGER
+);
 CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts_ms);
 CREATE INDEX IF NOT EXISTS idx_equity_day ON equity(day);
 """
@@ -166,6 +181,53 @@ class Store:
         return list(
             self.connection.execute("SELECT * FROM orders ORDER BY id DESC LIMIT ?", (limit,))
         )
+
+    # ---- research dossiers ------------------------------------------------ #
+
+    def save_dossier(self, data: dict) -> None:
+        stats = data.get("stats", {})
+        sides = data.get("sides", {})
+        long_side = sides.get("long", {})
+        short_side = sides.get("short", {})
+        archetype = (data.get("archetype") or {}).get("name", "")
+        self.connection.execute(
+            """INSERT INTO dossiers (address,name,win_rate,orders,total_pnl,long_pnl,
+               short_pnl,long_win_rate,short_win_rate,max_leverage,archetype,payload,updated_ms)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(address) DO UPDATE SET
+                 name=excluded.name, win_rate=excluded.win_rate, orders=excluded.orders,
+                 total_pnl=excluded.total_pnl, long_pnl=excluded.long_pnl,
+                 short_pnl=excluded.short_pnl, long_win_rate=excluded.long_win_rate,
+                 short_win_rate=excluded.short_win_rate, max_leverage=excluded.max_leverage,
+                 archetype=excluded.archetype, payload=excluded.payload,
+                 updated_ms=excluded.updated_ms""",
+            (
+                data["address"], data.get("name", ""), stats.get("win_rate", 0.0),
+                stats.get("orders", 0), stats.get("total_pnl", 0.0),
+                long_side.get("pnl", 0.0), short_side.get("pnl", 0.0),
+                long_side.get("win_rate", 0.0), short_side.get("win_rate", 0.0),
+                stats.get("max_leverage", 0.0), archetype,
+                json.dumps(data), now_ms(),
+            ),
+        )
+        self.connection.commit()
+
+    def load_dossier(self, address: str) -> dict | None:
+        row = self.connection.execute(
+            "SELECT payload FROM dossiers WHERE address = ?", (address,)
+        ).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def load_dossiers(self, limit: int = 100) -> list[dict]:
+        return [
+            json.loads(row["payload"])
+            for row in self.connection.execute(
+                "SELECT payload FROM dossiers ORDER BY total_pnl DESC LIMIT ?", (limit,)
+            )
+        ]
+
+    def dossier_count(self) -> int:
+        return int(self.connection.execute("SELECT COUNT(*) FROM dossiers").fetchone()[0])
 
     # ---- equity / events -------------------------------------------------- #
 

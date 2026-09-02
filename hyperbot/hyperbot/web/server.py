@@ -21,6 +21,7 @@ from ..copy.engine import CopyEngine
 from ..copy.reconciler import reconcile
 from ..copy.sizing import LeaderView, build_target_book
 from ..discovery.scanner import TraderScanner, allocations, select_roster
+from ..research.analyst import Analyst
 from ..log import get_logger
 from ..notify.dispatcher import Channel, Dispatcher, Event
 from ..store.db import Store
@@ -100,7 +101,9 @@ class DashboardServer:
         self.engine: CopyEngine | None = None
         self._engine_task: asyncio.Task | None = None
         self._scan_task: asyncio.Task | None = None
+        self._research_task: asyncio.Task | None = None
         self._scan_status = "idle"
+        self._research_status = "idle"
         self._started = utc_now()
         self._seed_history()
 
@@ -139,6 +142,8 @@ class DashboardServer:
                 "engine_running": self._engine_task is not None
                 and not self._engine_task.done(),
                 "scan_status": self._scan_status,
+                "research_status": self._research_status,
+                "researched": self.store.dossier_count(),
                 "started": self._started.isoformat(timespec="seconds"),
             },
             "account": None,
@@ -152,6 +157,7 @@ class DashboardServer:
             "equity_series": self._equity_series(),
             "events": self.hub.history[-60:],
             "risk": self._risk(),
+            "research": self.store.load_dossiers(60),
         }
 
         if not (self.info and config.account_address):
@@ -371,6 +377,54 @@ class DashboardServer:
         self._scan_task = asyncio.create_task(work())
         return {"ok": True, "message": "scan started"}
 
+    async def run_research(self, addresses: list[str] | None = None) -> dict[str, Any]:
+        """Study accounts in depth: trades, win rate, entry behaviour, strategy."""
+        if self._research_task and not self._research_task.done():
+            return {"ok": False, "message": "research already running"}
+
+        async def work() -> None:
+            self._research_status = "running"
+            await self.hub.publish({"type": "research", "status": "running"})
+            try:
+                assert self.info is not None
+                targets = addresses or self._research_targets()
+                if not targets:
+                    self._research_status = "idle"
+                    await self.hub.publish(
+                        {"type": "research", "status": "done", "count": 0}
+                    )
+                    return
+                log.info("researching %d accounts in depth", len(targets))
+                dossiers = await Analyst(self.info).study_many(targets, concurrency=4)
+                for dossier in dossiers:
+                    self.store.save_dossier(dossier.as_dict())
+                self._research_status = "idle"
+                log.info("research complete: %d dossiers", len(dossiers))
+                await self.hub.publish(
+                    {"type": "research", "status": "done", "count": len(dossiers)}
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._research_status = "failed"
+                log.error("research failed: %s", exc, exc_info=True)
+                await self.hub.publish(
+                    {"type": "research", "status": "failed", "error": str(exc)}
+                )
+
+        self._research_task = asyncio.create_task(work())
+        return {"ok": True, "message": "research started"}
+
+    def _research_targets(self, limit: int = 24) -> list[str]:
+        """The best-scoring accounts we know about, roster first."""
+        seen: list[str] = []
+        for row in self.store.load_roster():
+            if row["address"] not in seen:
+                seen.append(row["address"])
+        for column in ("elite_score", "rising_score"):
+            for row in self.store.top_traders(column, limit):
+                if row["address"] not in seen:
+                    seen.append(row["address"])
+        return seen[:limit]
+
     async def flatten(self) -> dict[str, Any]:
         if not (self.engine and self.info and self.config.account_address):
             return {"ok": False, "message": "engine not running"}
@@ -408,6 +462,16 @@ def build_app(server: DashboardServer, dispatcher: Dispatcher) -> web.Applicatio
     async def api_scan(_: web.Request) -> web.StreamResponse:
         return web.json_response(await server.trigger_scan())
 
+    async def api_research(_: web.Request) -> web.StreamResponse:
+        return web.json_response(await server.run_research())
+
+    async def api_trader(request: web.Request) -> web.StreamResponse:
+        address = request.match_info["address"]
+        dossier = server.store.load_dossier(address)
+        if dossier is None:
+            return web.json_response({"error": "not researched yet"}, status=404)
+        return web.json_response(dossier)
+
     async def api_flatten(request: web.Request) -> web.StreamResponse:
         body = await request.json() if request.can_read_body else {}
         if body.get("confirm") != "FLATTEN":
@@ -435,12 +499,23 @@ def build_app(server: DashboardServer, dispatcher: Dispatcher) -> web.Applicatio
             web.get("/favicon.ico", favicon),
             web.get("/api/snapshot", api_snapshot),
             web.post("/api/scan", api_scan),
+            web.post("/api/research", api_research),
+            web.get("/api/trader/{address}", api_trader),
             web.post("/api/flatten", api_flatten),
             web.get("/ws", websocket),
         ]
     )
     app["dispatcher"] = dispatcher
     return app
+
+
+async def _auto_research(server: "DashboardServer") -> None:
+    """Kick off the deep research pass once the first scan has produced a roster."""
+    for _ in range(60):
+        await asyncio.sleep(5)
+        if server.store.dossier_count() == 0 and server._research_targets():
+            await server.run_research()
+            return
 
 
 async def serve(
@@ -490,6 +565,7 @@ async def serve(
         if run_engine and config.account_address:
             server.engine = CopyEngine(config, info, exchange, dispatcher, server.store)
             server._engine_task = asyncio.create_task(server.engine.start())
+            server._auto_research_task = asyncio.create_task(_auto_research(server))
         elif run_engine:
             log.warning("no account address set - dashboard runs in discovery-only mode")
             await dispatcher.info(

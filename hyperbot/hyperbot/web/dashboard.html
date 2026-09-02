@@ -163,6 +163,57 @@ tbody tr:hover { background: var(--surface-2); }
 .ev.TRADE .ev-title { color: var(--accent); }
 .ev.WARN .ev-title { color: var(--warn); }
 .ev.CRITICAL .ev-title { color: var(--critical); }
+/* ---- research leaderboard + drawer ---- */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--text); }
+th.sortable[aria-sort]:not([aria-sort="none"]) { color: var(--accent); }
+th.sortable .arrow { opacity: .5; font-size: 10px; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: var(--surface-2); }
+.tname { font-weight: 600; }
+.taddr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-muted); }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px;
+       background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
+.tag.warnflag { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+         transition: opacity .18s; z-index: 60; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100%);
+          background: var(--page); border-left: 1px solid var(--border); z-index: 61;
+          transform: translateX(100%); transition: transform .22s ease; overflow-y: auto; }
+.drawer.open { transform: none; }
+@media (prefers-reduced-motion: reduce) { .drawer, .scrim { transition: none; } }
+.drawer-head { position: sticky; top: 0; background: var(--page); border-bottom: 1px solid var(--border);
+               padding: 16px 20px; display: flex; align-items: flex-start; gap: 12px; z-index: 2; }
+.drawer-head h3 { margin: 0 0 3px; font-size: 17px; letter-spacing: -.01em; }
+.drawer-body { padding: 4px 20px 40px; }
+.drawer section { margin-top: 22px; }
+.drawer section > h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+                       color: var(--text-muted); margin: 0 0 10px; font-weight: 650; }
+.statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px;
+            background: var(--border); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.statgrid > div { background: var(--surface); padding: 10px 12px; }
+.statgrid .k { font-size: 11px; color: var(--text-muted); }
+.statgrid .v { font-size: 15px; font-weight: 600; margin-top: 2px; }
+.sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sidecard { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+.sidecard h5 { margin: 0 0 8px; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+.sidecard.long h5 { color: var(--long); } .sidecard.short h5 { color: var(--short); }
+.sidecard .row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+.sidecard .row span:last-child { font-variant-numeric: tabular-nums; }
+.bars { display: flex; flex-direction: column; gap: 6px; }
+.bar { display: grid; grid-template-columns: 80px 1fr 46px; align-items: center; gap: 10px; font-size: 12px; }
+.bar .track { display: block; height: 8px; background: var(--surface-2);
+              border-radius: 4px; overflow: hidden; }
+.bar .fill { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.evidence { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-2); }
+.evidence li { margin: 3px 0; }
+.prose { font-size: 13.5px; line-height: 1.6; color: var(--text-2); }
+.prose strong { color: var(--text); }
+.callout { border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent);
+           padding: 10px 14px; border-radius: 0 8px 8px 0; font-size: 12.5px; color: var(--text-2); }
+.callout.info { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .banner { padding: 11px 16px; border-radius: 10px; margin-bottom: 16px; font-size: 13px; border: 1px solid transparent; }
 .banner.warn { background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 .banner.crit { background: color-mix(in srgb, var(--critical) 12%, transparent); border-color: color-mix(in srgb, var(--critical) 35%, transparent); color: var(--critical); }
@@ -239,12 +290,33 @@ tbody tr:hover { background: var(--surface-2); }
   </div>
 
   <div class="card">
+    <h2>Trader research
+      <span class="hint" id="research-hint">click any row for the full breakdown</span>
+      <span class="spacer"></span>
+      <button id="btn-research" style="margin:-4px 12px -4px 0">Research traders</button>
+    </h2>
+    <div class="scroll"><table id="leaderboard"></table></div>
+  </div>
+
+  <div class="card">
     <h2>Following <span class="hint" id="roster-hint"></span></h2>
     <div class="scroll"><table id="roster"></table></div>
   </div>
 </div>
 
 <div class="tooltip" id="tip"></div>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+  <div class="drawer-head">
+    <div style="min-width:0">
+      <h3 id="drawer-title">—</h3>
+      <div class="taddr" id="drawer-addr"></div>
+    </div>
+    <span class="spacer"></span>
+    <button id="drawer-close" aria-label="Close">Close</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
 
 <script>
 "use strict";
@@ -531,6 +603,12 @@ function render() {
     {h: "Status", f: r => `<span class="pill">${r.status}</span>`},
   ], s.orders, "No orders yet.");
 
+  try { renderResearch(); } catch (e) { console.error("research table:", e); }
+
+  const researching = cfg.research_status === "running";
+  $("btn-research").disabled = researching;
+  $("btn-research").textContent = researching ? "Researching…" : "Research traders";
+
   $("btn-flatten").disabled = !s.positions.length;
   $("btn-scan").disabled = cfg.scan_status === "running";
   $("btn-scan").textContent = cfg.scan_status === "running" ? "Scanning…" : "Rescan traders";
@@ -546,6 +624,223 @@ function renderFeed(events) {
         </div></div>`).join("")
     : `<div class="empty">Waiting for activity…</div>`;
 }
+
+
+/* ---------- trader research ---------- */
+let SORT = {key: "total_pnl", dir: -1};
+
+const RESEARCH_COLS = [
+  {key: "name",        label: "Trader",    sortable: false},
+  {key: "archetype",   label: "Style",     sortable: false},
+  {key: "orders",      label: "Exits"},
+  {key: "win_rate",    label: "Win rate"},
+  {key: "long_pnl",    label: "Long P&L"},
+  {key: "short_pnl",   label: "Short P&L"},
+  {key: "total_pnl",   label: "Realised P&L"},
+  {key: "max_leverage", label: "Max lev"},
+];
+
+function researchValue(d, key) {
+  const s = d.stats || {}, sides = d.sides || {};
+  switch (key) {
+    case "orders": return s.orders || 0;
+    case "win_rate": return s.win_rate || 0;
+    case "total_pnl": return s.total_pnl || 0;
+    case "max_leverage": return Math.max(s.max_leverage || 0, s.current_leverage || 0);
+    case "long_pnl": return (sides.long || {}).pnl || 0;
+    case "short_pnl": return (sides.short || {}).pnl || 0;
+    default: return 0;
+  }
+}
+
+function renderResearch() {
+  const node = $("leaderboard");
+  const rows = (SNAP && SNAP.research) ? SNAP.research.slice() : [];
+  if (!rows.length) {
+    node.innerHTML = `<tbody><tr><td class="empty">
+      No accounts researched yet — press “Research traders”. It reads each account's
+      public fills, reconstructs their exits, and measures win rate by side.
+    </td></tr></tbody>`;
+    return;
+  }
+  rows.sort((a, b) => (researchValue(a, SORT.key) - researchValue(b, SORT.key)) * SORT.dir);
+
+  const head = "<thead><tr>" + RESEARCH_COLS.map(c => {
+    if (c.sortable === false) return `<th>${c.label}</th>`;
+    const active = SORT.key === c.key;
+    const arrow = active ? (SORT.dir < 0 ? "▾" : "▴") : "";
+    return `<th class="sortable" data-key="${c.key}"
+      aria-sort="${active ? (SORT.dir < 0 ? "descending" : "ascending") : "none"}"
+      >${c.label} <span class="arrow">${arrow}</span></th>`;
+  }).join("") + "</tr></thead>";
+
+  const body = rows.map(d => {
+    const s = d.stats || {}, sides = d.sides || {};
+    const L = sides.long || {}, S = sides.short || {};
+    const flag = s.never_takes_losses
+      ? ` <span class="tag warnflag" title="Closes winners, holds losers">holds losers</span>` : "";
+    const thin = (s.sample_quality === "thin" || s.sample_quality === "very thin")
+      ? ` <span class="tag" title="Few closing orders — treat as indicative">${s.sample_quality}</span>` : "";
+    return `<tr class="clickable" data-addr="${d.address}">
+      <td><div class="tname">${d.name || "—"}${flag}${thin}</div>
+          <div class="taddr">${shortAddr(d.address)}</div></td>
+      <td><span class="tag">${(d.archetype || {}).name || "—"}</span></td>
+      <td class="num">${s.orders || 0}</td>
+      <td class="num">${pct(s.win_rate, 0)}</td>
+      <td class="num ${cls(L.pnl)}">${L.trades ? `${signedUsd(L.pnl)} <span style="color:var(--text-muted)">${pct(L.win_rate,0)}</span>` : "—"}</td>
+      <td class="num ${cls(S.pnl)}">${S.trades ? `${signedUsd(S.pnl)} <span style="color:var(--text-muted)">${pct(S.win_rate,0)}</span>` : "—"}</td>
+      <td class="num ${cls(s.total_pnl)}">${signedUsd(s.total_pnl)}</td>
+      <td class="num">${(() => { const lv = Math.max(s.max_leverage||0, s.current_leverage||0);
+        return lv >= 1 ? lv.toFixed(0) + "×" : "—"; })()}</td>
+    </tr>`;
+  }).join("");
+
+  node.innerHTML = head + `<tbody>${body}</tbody>`;
+  node.querySelectorAll("th.sortable").forEach(th => th.onclick = () => {
+    const key = th.dataset.key;
+    SORT = {key, dir: SORT.key === key ? -SORT.dir : -1};
+    renderResearch();
+  });
+  node.querySelectorAll("tr.clickable").forEach(tr =>
+    tr.onclick = () => openTrader(tr.dataset.addr));
+  $("research-hint").textContent = `${rows.length} accounts · click any row`;
+}
+
+function findDossier(address) {
+  return (SNAP && SNAP.research || []).find(d => d.address === address) || null;
+}
+
+function bar(label, value, max, color) {
+  const w = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return `<div class="bar"><span>${label}</span>
+    <span class="track"><span class="fill" style="width:${w}%;background:${color || "var(--accent)"}"></span></span>
+    <span class="num" style="text-align:right">${value}</span></div>`;
+}
+
+function openTrader(address) {
+  const d = findDossier(address);
+  if (!d) return;
+  const s = d.stats || {}, sides = d.sides || {}, L = sides.long || {}, S = sides.short || {};
+  const a = d.archetype || {}, f = d.fingerprint;
+
+  $("drawer-title").textContent = d.name || "Trader";
+  $("drawer-addr").textContent = d.address;
+
+  const stat = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const pf = s.profit_factor === null || s.profit_factor === undefined
+    ? "n/a" : s.profit_factor.toFixed(2);
+
+  const notes = (d.notes || []).map(n => `<div class="callout">${n}</div>`).join("");
+
+  const maxCoin = Math.max(...(d.coins || []).map(c => c.trades), 1);
+  const coinBars = (d.coins || []).slice(0, 6)
+    .map(c => bar(c.coin.replace(/^xyz:/, ""), c.trades, maxCoin)).join("");
+
+  const backtests = (d.backtests || []).length ? `
+    <section><h4>Does that pattern work on its own?</h4>
+      <div class="callout info">These backtest <strong>our reconstruction</strong> of the
+      pattern above, run independently on the same market and period. They are not this
+      trader's strategy — we cannot see anyone's rules, sizing or stops — and a result
+      here is not evidence about them.</div>
+      <div class="scroll" style="margin-top:10px"><table>
+        <thead><tr><th>Rule</th><th>Market</th><th>Trades</th><th>Win</th><th>PF</th><th>Return</th><th>Max DD</th></tr></thead>
+        <tbody>${d.backtests.map(b => `<tr>
+          <td style="max-width:260px;white-space:normal">${b.rule}</td>
+          <td>${b.coin.replace(/^xyz:/, "")} ${b.interval}</td>
+          <td class="num">${b.trades}</td>
+          <td class="num">${pct(b.win_rate, 0)}</td>
+          <td class="num">${b.profit_factor == null ? "n/a" : b.profit_factor.toFixed(2)}</td>
+          <td class="num ${cls(b.total_return)}">${signedPct(b.total_return, 1)}</td>
+          <td class="num">${pct(b.max_drawdown, 1)}</td></tr>`).join("")}
+        </tbody></table></div>
+    </section>` : "";
+
+  const exits = (d.recent_exits || []).length ? `
+    <section><h4>Recent exits</h4>
+      <div class="scroll"><table>
+        <thead><tr><th>When</th><th>Coin</th><th>Side</th><th>Size</th><th>Price</th><th>Fills</th><th>P&L</th></tr></thead>
+        <tbody>${d.recent_exits.slice(0, 15).map(e => `<tr>
+          <td class="num">${new Date(e.time).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})}</td>
+          <td><strong>${e.coin.replace(/^xyz:/, "")}</strong></td>
+          <td><span class="pill ${e.side}">${e.side.toUpperCase()}</span></td>
+          <td class="num">${num(e.size)}</td>
+          <td class="num">${num(e.price)}</td>
+          <td class="num">${e.fills}</td>
+          <td class="num ${cls(e.pnl)}">${signedUsd(e.pnl)}</td></tr>`).join("")}
+        </tbody></table></div>
+    </section>` : "";
+
+  $("drawer-body").innerHTML = `
+    <section><p class="prose">${d.description || ""}</p>${notes}</section>
+
+    <section><h4>Realised performance</h4>
+      <div class="statgrid">
+        ${stat("Closing orders", s.orders || 0)}
+        ${stat("Win rate", `${pct(s.win_rate, 0)} <span style="font-size:11px;color:var(--text-muted)">${s.sample_quality || ""}</span>`)}
+        ${stat("Profit factor", pf)}
+        ${stat("Realised P&L", signedUsd(s.total_pnl))}
+        ${stat("Unrealised", signedUsd(s.unrealized_pnl))}
+        ${stat("Expectancy / exit", signedUsd(s.expectancy))}
+        ${stat("Avg win", usd(s.avg_win))}
+        ${stat("Avg loss", usd(s.avg_loss))}
+        ${stat("Payoff ratio", (s.payoff_ratio || 0).toFixed(2) + "×")}
+        ${stat("Fees paid", usd(s.fees))}
+        ${stat("Window", `${(s.window_days || 0).toFixed(0)} d`)}
+        ${stat("Median hold", s.median_hold_hours == null ? "n/a"
+            : s.median_hold_hours < 48 ? `${s.median_hold_hours.toFixed(1)} h`
+            : `${(s.median_hold_hours/24).toFixed(1)} d`)}
+      </div>
+    </section>
+
+    <section><h4>Long vs short</h4>
+      <div class="sides">
+        <div class="sidecard long"><h5>Long — ${L.trades || 0} exits</h5>
+          <div class="row"><span>Win rate</span><span>${pct(L.win_rate, 0)}</span></div>
+          <div class="row"><span>Realised</span><span class="${cls(L.pnl)}">${signedUsd(L.pnl)}</span></div>
+          <div class="row"><span>Profit factor</span><span>${L.profit_factor == null ? "n/a" : (L.profit_factor||0).toFixed(2)}</span></div>
+          <div class="row"><span>P&L per $ traded</span><span>${pct(L.roi_on_volume, 2)}</span></div>
+        </div>
+        <div class="sidecard short"><h5>Short — ${S.trades || 0} exits</h5>
+          <div class="row"><span>Win rate</span><span>${pct(S.win_rate, 0)}</span></div>
+          <div class="row"><span>Realised</span><span class="${cls(S.pnl)}">${signedUsd(S.pnl)}</span></div>
+          <div class="row"><span>Profit factor</span><span>${S.profit_factor == null ? "n/a" : (S.profit_factor||0).toFixed(2)}</span></div>
+          <div class="row"><span>P&L per $ traded</span><span>${pct(S.roi_on_volume, 2)}</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section><h4>Markets traded</h4><div class="bars">${coinBars || "<div class='prose'>—</div>"}</div></section>
+
+    <section><h4>How they enter — ${a.name || "unknown"}
+        <span class="tag">${a.confidence || ""} confidence</span></h4>
+      <p class="prose">${a.summary || ""}</p>
+      ${f && f.entries ? `<ul class="evidence">${(a.evidence || []).map(e => `<li>${e}</li>`).join("")}</ul>` : ""}
+      ${f && f.entries ? `<p class="prose" style="margin-top:8px">Measured on
+        <strong>${f.entries}</strong> entries whose opening fills were visible.</p>` : ""}
+    </section>
+
+    ${backtests}
+    ${exits}`;
+
+  $("drawer").classList.add("open");
+  $("scrim").classList.add("open");
+  $("drawer-close").focus();
+}
+
+function closeDrawer() {
+  $("drawer").classList.remove("open");
+  $("scrim").classList.remove("open");
+}
+$("drawer-close").onclick = closeDrawer;
+$("scrim").onclick = closeDrawer;
+addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+$("btn-research").onclick = async () => {
+  $("btn-research").disabled = true;
+  $("btn-research").textContent = "Researching…";
+  await fetch("/api/research", {method: "POST"});
+  poll();
+};
 
 /* ---------- data ---------- */
 async function poll() {
@@ -570,7 +865,7 @@ function connect() {
     const msg = JSON.parse(m.data);
     if (msg.type === "hello") { EVENTS = msg.events || []; renderFeed(EVENTS); }
     else if (msg.type === "event") { EVENTS.push(msg); EVENTS = EVENTS.slice(-200); renderFeed(EVENTS); }
-    else if (msg.type === "scan") { poll(); }
+    else if (msg.type === "scan" || msg.type === "research") { poll(); }
   };
 }
 

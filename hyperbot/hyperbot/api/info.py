@@ -82,6 +82,10 @@ class Fill:
     fee: float
     hash: str = ""
     oid: int = 0
+    # Signed position size BEFORE this fill. Present on every fill, and the only
+    # way to know where a position started when the opening fills fall outside
+    # the 2000-fill window.
+    start_position: float = 0.0
 
     @property
     def is_buy(self) -> bool:
@@ -229,6 +233,22 @@ class InfoClient:
             request["endTime"] = end_ms
         return [_parse_fill(entry) for entry in await self._post(request)]
 
+    async def candles(
+        self, coin: str, interval: str, start_ms: int, end_ms: int
+    ) -> list[dict[str, Any]]:
+        """OHLCV candles. Intervals: 1m 5m 15m 1h 4h 1d (and others)."""
+        return await self._post(
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": coin,
+                    "interval": interval,
+                    "startTime": start_ms,
+                    "endTime": end_ms,
+                },
+            }
+        )
+
     async def open_orders(self, address: str) -> list[dict[str, Any]]:
         return await self._post({"type": "openOrders", "user": address})
 
@@ -245,4 +265,5 @@ def _parse_fill(entry: dict[str, Any]) -> Fill:
         fee=to_float(entry.get("fee")),
         hash=entry.get("hash", ""),
         oid=int(entry.get("oid", 0) or 0),
+        start_position=to_float(entry.get("startPosition")),
     )

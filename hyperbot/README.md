@@ -224,6 +224,51 @@ Also worth knowing:
   month's. A raw difference is meaningless across this population — an account up 1200% on
   the month shows an "acceleration" of −500 points while still compounding beautifully.
 
+## Testing it with $1,000
+
+```bash
+python run.py -c config.1k.yaml serve
+```
+
+`config.1k.yaml` runs a **forward paper test**: a simulated $1,000 account that mirrors the
+roster at live prices and pays the costs a small copier really pays. It never touches an
+exchange — all three live-trading locks stay off — but unlike dry-run it keeps an account,
+so the run produces a P&L you can judge instead of a log you have to imagine. State is
+persisted, so the test continues across restarts.
+
+**The three costs it charges, because they decide a small account:**
+
+| Cost | Rate | Why it matters at $1,000 |
+|---|---|---|
+| Taker fee | 4.5 bps | Every mirror order crosses the book |
+| Slippage | 5 bps | A copier is never first to the price |
+| Funding | measured live | **+11%/yr on most of these markets, and this cohort is 95% long — so you pay** |
+
+Funding is the one people forget. At 2× gross exposure, +11% annualised funding is ~22% of
+capital a year bleeding out before a single trade is right or wrong. In the first live run,
+simply *opening* the book cost **$1.20 — 0.12% of capital** in fees and slippage alone.
+
+**Copyability, not curve shape, picks the roster.** Discovery ranks on the equity curve,
+which counts unrealised gains; for copying that is the wrong test. The account with the
+largest realised P&L in one live run — **$2.98M** — had made it across just **six closing
+orders**, and got demoted to "marginal". A 102-order trader with $485k realised and a 92%
+win rate became the top pick. After research the roster is rebuilt from a gate that asks
+whether a trader has *repeatedly banked money in a way a $1,000 account can reproduce*:
+
+- at least 20 closing orders — six decisions is not a track record
+- realised P&L positive — gains on paper are not gains
+- not "closes winners, holds losers" — a copier inherits the losers
+- most of the profit realised, not unrealised — you would be buying it at today's price
+- the book expressible at $1,000 (Hyperliquid rejects orders under $10)
+
+On live data 8 of 14 researched accounts cleared it.
+
+**Why `max_leverage: 5` and not 20.** You asked for higher leverage, and the preset caps it
+lower than you might expect. At $1,000 and 20×, a 5% adverse move is a liquidation — and
+you enter *after* the leader, so you carry their drawdown from a worse price. The paper
+account simulates liquidation, so raising it is a decision you can test rather than
+discover with real money. Raise `risk.max_leverage` and watch what happens first.
+
 ## Where the tracked traders are positioned
 
 The panel at the top of the dashboard (`python run.py signals` in the terminal) ranks coins

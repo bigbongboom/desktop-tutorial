@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS consensus (
     payload TEXT,
     updated_ms INTEGER
 );
+CREATE TABLE IF NOT EXISTS paper (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT,
+    updated_ms INTEGER
+);
+CREATE TABLE IF NOT EXISTS paper_equity (
+    ts_ms INTEGER PRIMARY KEY,
+    equity REAL,
+    pnl REAL,
+    gross REAL,
+    costs REAL
+);
 CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts_ms);
 CREATE INDEX IF NOT EXISTS idx_equity_day ON equity(day);
 """
@@ -245,6 +257,41 @@ class Store:
             "SELECT payload FROM consensus WHERE id = 1"
         ).fetchone()
         return json.loads(row["payload"]) if row else None
+
+    def save_paper(self, payload: dict) -> None:
+        self.connection.execute(
+            "INSERT INTO paper (id,payload,updated_ms) VALUES (1,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, "
+            "updated_ms=excluded.updated_ms",
+            (json.dumps(payload), now_ms()),
+        )
+        self.connection.commit()
+
+    def load_paper(self) -> dict | None:
+        row = self.connection.execute(
+            "SELECT payload FROM paper WHERE id = 1"
+        ).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def record_paper_equity(
+        self, equity: float, pnl: float, gross: float, costs: float
+    ) -> None:
+        self.connection.execute(
+            "INSERT OR REPLACE INTO paper_equity VALUES (?,?,?,?,?)",
+            (now_ms(), equity, pnl, gross, costs),
+        )
+        self.connection.commit()
+
+    def paper_equity_series(self, limit: int = 500) -> list[dict]:
+        rows = list(self.connection.execute(
+            "SELECT ts_ms, equity, pnl, gross, costs FROM paper_equity "
+            "ORDER BY ts_ms DESC LIMIT ?", (limit,)
+        ))
+        return [
+            {"ts": r["ts_ms"], "equity": r["equity"], "pnl": r["pnl"],
+             "gross": r["gross"], "costs": r["costs"]}
+            for r in reversed(rows)
+        ]
 
     def dossier_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM dossiers").fetchone()[0])

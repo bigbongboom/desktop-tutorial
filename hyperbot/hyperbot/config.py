@@ -117,6 +117,22 @@ class NotifyConfig:
 
 
 @dataclass
+class PaperConfig:
+    """Forward-test a simulated account against live prices.
+
+    Distinct from dry_run: dry_run computes orders and sends nothing, paper
+    additionally keeps an account and marks it to market, so the run produces a
+    P&L you can judge instead of a log you have to imagine.
+    """
+
+    enabled: bool = False
+    starting_equity: float = 1000.0
+    taker_fee_bps: float = 4.5   # Hyperliquid base tier
+    slippage_bps: float = 5.0    # a copier is never first to the price
+    charge_funding: bool = True
+
+
+@dataclass
 class Config:
     network: str = "testnet"
     dry_run: bool = True
@@ -129,6 +145,7 @@ class Config:
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     copy: CopyConfig = field(default_factory=CopyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    paper: PaperConfig = field(default_factory=PaperConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
 
     # ---- derived endpoints ------------------------------------------------ #

@@ -5,14 +5,15 @@ import asyncio
 from dataclasses import dataclass, field
 
 from ..api.exchange import ExchangeClient
-from ..api.info import AccountState, Fill, InfoClient
+from ..api.info import AccountState, Fill, InfoClient, Position
 from ..api.ws import WSManager
 from ..config import Config
 from ..discovery.scanner import ScoredTrader, TraderScanner, allocations, select_roster
 from ..log import get_logger
 from ..notify.dispatcher import Dispatcher, Severity
+from ..paper.broker import PaperBroker
 from ..store.db import Store
-from ..util import pct, short_addr, usd, utc_now
+from ..util import now_ms, pct, short_addr, usd, utc_now
 from .reconciler import Adjustment, reconcile
 from .risk import RiskManager
 from .sizing import LeaderView, build_target_book
@@ -61,6 +62,28 @@ class CopyEngine:
         self._running = False
         self._last_positions: dict[str, float] = {}
         self._positions_seeded = False
+        # Paper mode keeps its own account, so the run yields a P&L rather than
+        # a list of orders you have to imagine the outcome of.
+        self.paper: PaperBroker | None = None
+        if config.paper.enabled:
+            saved = store.load_paper()
+            if saved:
+                self.paper = PaperBroker.from_dict(
+                    saved,
+                    taker_fee_bps=config.paper.taker_fee_bps,
+                    slippage_bps=config.paper.slippage_bps,
+                )
+                log.info(
+                    "resumed paper account: $%.2f equity, %d trades",
+                    self.paper.state.cash, self.paper.state.trades,
+                )
+            else:
+                self.paper = PaperBroker(
+                    config.paper.starting_equity,
+                    taker_fee_bps=config.paper.taker_fee_bps,
+                    slippage_bps=config.paper.slippage_bps,
+                )
+                log.info("new paper account: $%.2f", config.paper.starting_equity)
         self._last_summary_day = ""
 
     # ---- roster ----------------------------------------------------------- #
@@ -131,6 +154,16 @@ class CopyEngine:
 
     # ---- leader tracking --------------------------------------------------- #
 
+    def adopt_roster(self, entries: list[tuple[str, str, float]]) -> None:
+        """Replace the followed set (used when research re-ranks by copyability)."""
+        self.leaders = {
+            address.lower(): Leader(
+                address=address.lower(), label=label, allocation=weight, source="copyable"
+            )
+            for address, label, weight in entries
+        }
+        self._reconcile_now.set()
+
     async def refresh_leader_views(self) -> None:
         addresses = list(self.leaders)
         if not addresses:
@@ -168,11 +201,56 @@ class CopyEngine:
 
     # ---- the cycle --------------------------------------------------------- #
 
+    def _paper_account(self, meta: dict) -> AccountState:
+        """Present the simulated book in the same shape as a real one, so the
+        reconciler and risk manager need no special cases."""
+        assert self.paper is not None
+        marks = {coin: asset.mark_price for coin, asset in meta.items()}
+        state = self.paper.state
+        account = AccountState(
+            address="paper",
+            account_value=self.paper.mark(marks),
+            timestamp=now_ms(),
+        )
+        for coin, position in state.positions.items():
+            mark = marks.get(coin, position.entry_price)
+            account.total_notional += position.notional(mark)
+            account.positions[coin] = Position(
+                coin=coin,
+                size=position.size,
+                entry_price=position.entry_price,
+                position_value=position.notional(mark),
+                unrealized_pnl=position.unrealized(mark),
+                leverage=position.leverage,
+            )
+        account.withdrawable = state.cash
+        return account
+
     async def run_cycle(self) -> None:
         self.stats.cycles += 1
-        account = await self.info.account_state(self.config.account_address)
-        self.stats.last_equity = account.account_value
         meta = await self.info.asset_meta(refresh=True)
+
+        if self.paper is not None:
+            marks = {coin: asset.mark_price for coin, asset in meta.items()}
+            if self.config.paper.charge_funding:
+                rates = {coin: asset.funding for coin, asset in meta.items()}
+                self.paper.apply_funding(marks, rates)
+            if self.paper.check_liquidation(marks):
+                await self.notify.critical(
+                    "PAPER ACCOUNT LIQUIDATED",
+                    "The simulated account fell below maintenance margin. "
+                    "This is exactly what would have happened to real money.",
+                )
+            account = self._paper_account(meta)
+            self.store.save_paper(self.paper.to_dict())
+            summary = self.paper.summary(marks)
+            self.store.record_paper_equity(
+                summary["equity"], summary["pnl"], summary["gross_notional"],
+                summary["total_costs"],
+            )
+        else:
+            account = await self.info.account_state(self.config.account_address)
+        self.stats.last_equity = account.account_value
 
         state = self.risk.observe(account)
         day_pnl, day_pnl_pct = self.risk.day_pnl(account.account_value)
@@ -259,7 +337,23 @@ class CopyEngine:
             return
 
         row_id = self.store.record_order_intent(order, adjustment.kind, not self.exchange.live)
-        result = await self.exchange.place(order)
+        if self.paper is not None:
+            fill = self.paper.execute(
+                adjustment.coin,
+                adjustment.delta_notional,
+                asset.mark_price,
+                leverage=min(self.config.risk.max_leverage, asset.max_leverage),
+                reason=adjustment.kind,
+            )
+            from ..api.exchange import OrderResult
+
+            result = OrderResult(
+                ok=fill is not None, request=order,
+                filled_size=fill.size if fill else 0.0,
+                avg_price=fill.price if fill else 0.0,
+            )
+        else:
+            result = await self.exchange.place(order)
         self.store.record_order_result(row_id, result)
         self.stats.orders_sent += 1
 

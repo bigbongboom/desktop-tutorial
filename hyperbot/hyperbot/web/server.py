@@ -160,6 +160,8 @@ class DashboardServer:
             "risk": self._risk(),
             "research": self.store.load_dossiers(60),
             "consensus": self.store.load_consensus(),
+            "paper": self._paper_summary(),
+            "paper_equity": self.store.paper_equity_series(400),
         }
 
         if not (self.info and config.account_address):
@@ -265,6 +267,16 @@ class DashboardServer:
             for adjustment in adjustments
         ]
         return data
+
+    def _paper_summary(self) -> dict[str, Any] | None:
+        engine = self.engine
+        if engine is None or engine.paper is None or self.info is None:
+            return None
+        try:
+            marks = {c: a.mark_price for c, a in self.info._meta_cache.items()}
+        except Exception:  # noqa: BLE001
+            marks = {}
+        return engine.paper.summary(marks)
 
     def _risk(self) -> dict[str, Any]:
         if not self.engine:
@@ -397,7 +409,11 @@ class DashboardServer:
                     )
                     return
                 log.info("researching %d accounts in depth", len(targets))
-                dossiers = await Analyst(self.info).study_many(targets, concurrency=4)
+                dossiers = await Analyst(
+                    self.info,
+                    capital=self.config.paper.starting_equity,
+                    exposure_multiplier=self.config.copy.exposure_multiplier,
+                ).study_many(targets, concurrency=4)
                 for dossier in dossiers:
                     self.store.save_dossier(dossier.as_dict())
 
@@ -408,6 +424,7 @@ class DashboardServer:
                     [(d.address, d.name, d.profile) for d in dossiers],
                 )
                 self.store.save_consensus(report_to_dict(report))
+                self._reselect_roster(dossiers)
                 self._research_status = "idle"
                 log.info("research complete: %d dossiers", len(dossiers))
                 await self.hub.publish(
@@ -422,6 +439,45 @@ class DashboardServer:
 
         self._research_task = asyncio.create_task(work())
         return {"ok": True, "message": "research started"}
+
+    def _reselect_roster(self, dossiers: list) -> None:
+        """Rebuild the roster from what research learned.
+
+        Discovery ranks on the equity curve, which counts unrealised gains. For
+        copying that is the wrong test: the account with the largest realised
+        P&L in one live run had made it across just six closing orders. Once the
+        dossiers exist we know who has repeatedly banked money, so the roster is
+        rebuilt from copyability rather than from curve shape.
+        """
+        ranked = sorted(
+            (d for d in dossiers if d.copyability and d.copyability.copyable),
+            key=lambda d: -d.copyability.score,
+        )
+        if not ranked:
+            log.warning(
+                "no account passed the copyability gate - keeping the existing roster"
+            )
+            return
+
+        chosen = ranked[: self.config.copy.max_leaders]
+        total = sum(d.copyability.score for d in chosen) or 1.0
+        self.store.replace_roster([
+            (
+                d.address,
+                d.name,
+                d.copyability.score / total,
+                "copyable",
+            )
+            for d in chosen
+        ])
+        log.info(
+            "roster rebuilt from copyability: %s",
+            ", ".join(f"{d.name} ({d.copyability.score:.0f})" for d in chosen),
+        )
+        if self.engine is not None:
+            self.engine.adopt_roster([
+                (d.address, d.name, d.copyability.score / total) for d in chosen
+            ])
 
     def _research_targets(self, limit: int = 24) -> list[str]:
         """The best-scoring accounts we know about, roster first."""

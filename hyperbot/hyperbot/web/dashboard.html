@@ -163,6 +163,19 @@ tbody tr:hover { background: var(--surface-2); }
 .ev.TRADE .ev-title { color: var(--accent); }
 .ev.WARN .ev-title { color: var(--warn); }
 .ev.CRITICAL .ev-title { color: var(--critical); }
+/* ---- paper account ---- */
+.paper-head { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+              padding: 16px 16px 4px; }
+.paper-eq { font-size: 30px; font-weight: 680; letter-spacing: -.02em; }
+.paper-delta { font-size: 15px; font-weight: 600; }
+.paper-note { font-size: 12px; color: var(--text-muted); }
+.costs { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px,1fr));
+         gap: 1px; background: var(--border); border-top: 1px solid var(--border);
+         border-bottom: 1px solid var(--border); margin-top: 10px; }
+.costs > div { background: var(--surface); padding: 9px 12px; }
+.costs .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+.costs .v { font-size: 14px; font-weight: 600; margin-top: 2px; }
+
 /* ---- consensus ---- */
 .cons { display: grid; gap: 10px; }
 .cons-row { display: grid; grid-template-columns: 92px 62px 1fr auto; gap: 14px;
@@ -253,6 +266,11 @@ tr.clickable:hover { background: var(--surface-2); }
   <div id="banners"></div>
 
   <section class="tiles" id="tiles"></section>
+
+  <div class="card" id="paper-card" hidden>
+    <h2>Paper account <span class="hint" id="paper-hint"></span></h2>
+    <div id="paper"></div>
+  </div>
 
   <div class="card" id="consensus-card">
     <h2>Where the tracked traders are positioned
@@ -400,13 +418,16 @@ const el = (n, attrs = {}) => {
   return e;
 };
 
-function drawEquity(series) {
-  const svg = $("equity-chart");
+function drawEquity(series) { drawSeries("equity-chart", series, "eq-hint"); }
+
+function drawSeries(id, series, hintId) {
+  const svg = $(id);
+  if (!svg) return;
   svg.innerHTML = "";
   const W = svg.clientWidth || 600, H = 200;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   if (!series || series.length < 2) {
-    $("eq-hint").textContent = "";
+    if (hintId && $(hintId)) $(hintId).textContent = "";
     const msg = el("text", {x: W/2, y: H/2, "text-anchor": "middle",
       fill: "var(--text-muted)", "font-size": 13});
     msg.textContent = "no equity history yet — it fills in as the engine runs";
@@ -434,7 +455,7 @@ function drawEquity(series) {
   const stroke = up ? "var(--up)" : "var(--down)";
 
   const path = series.map((d, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(d.equity).toFixed(1)}`).join("");
-  const gid = "eqfill";
+  const gid = id + "-fill";
   const grad = el("linearGradient", {id: gid, x1: 0, y1: 0, x2: 0, y2: 1});
   grad.append(el("stop", {offset: "0%", "stop-color": stroke, "stop-opacity": .18}));
   grad.append(el("stop", {offset: "100%", "stop-color": stroke, "stop-opacity": 0}));
@@ -467,7 +488,9 @@ function drawEquity(series) {
   hit.addEventListener("mouseleave", () => {
     cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); hideTip();
   });
-  $("eq-hint").textContent = `${series.length} samples · ${signedUsd(last - first)} over window`;
+  if (hintId && $(hintId)) {
+    $(hintId).textContent = `${series.length} samples · ${signedUsd(last - first)} over window`;
+  }
 }
 
 function drawExposure(targets) {
@@ -628,6 +651,7 @@ function render() {
     {h: "Status", f: r => `<span class="pill">${r.status}</span>`},
   ], s.orders, "No orders yet.");
 
+  try { renderPaper(); } catch (e) { console.error("paper:", e); }
   try { renderConsensus(); } catch (e) { console.error("consensus:", e); }
   try { renderResearch(); } catch (e) { console.error("research table:", e); }
 
@@ -651,6 +675,70 @@ function renderFeed(events) {
     : `<div class="empty">Waiting for activity…</div>`;
 }
 
+
+/* ---------- paper account ---------- */
+function renderPaper() {
+  const p = SNAP && SNAP.paper;
+  const card = $("paper-card");
+  if (!p) { card.hidden = true; return; }
+  card.hidden = false;
+
+  const up = p.pnl >= 0;
+  const series = (SNAP.paper_equity || []).map(d => ({ts: d.ts, equity: d.equity, day_pnl: d.pnl}));
+  $("paper-hint").textContent =
+    `simulated · ${p.days_running < 1 ? (p.days_running*24).toFixed(1) + "h" : p.days_running.toFixed(1) + "d"} running · ${p.trades} fills`;
+
+  const liq = p.liquidated
+    ? `<div class="banner crit" style="margin:0 16px 12px">Liquidated. The simulated
+       account fell below maintenance margin — with real money this would be gone.</div>` : "";
+
+  const posRows = p.positions.length ? p.positions.map(x => `<tr>
+      <td><strong>${x.coin.replace(/^xyz:/, "")}</strong></td>
+      <td><span class="pill ${x.side.toLowerCase()}">${x.side}</span></td>
+      <td class="num">${num(Math.abs(x.size))}</td>
+      <td class="num">${num(x.entry)}</td>
+      <td class="num">${num(x.mark)}</td>
+      <td class="num">${usd(Math.abs(x.notional))}</td>
+      <td class="num ${cls(x.unrealized)}">${signedUsd(x.unrealized)}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="7" class="empty">No simulated positions open.</td></tr>`;
+
+  $("paper").innerHTML = liq + `
+    <div class="paper-head">
+      <div>
+        <div class="paper-eq ${up ? "pos" : "neg"}">${usd(p.equity)}</div>
+        <div class="paper-note">from ${usd(p.starting_equity)} starting capital</div>
+      </div>
+      <div>
+        <div class="paper-delta ${up ? "pos" : "neg"}">${signedUsd(p.pnl)} (${signedPct(p.return_pct)})</div>
+        <div class="paper-note">${p.trades} fills · ${p.leverage.toFixed(2)}× gross · ${pct(p.drawdown,1)} drawdown</div>
+      </div>
+    </div>
+    <div class="costs">
+      <div><div class="k">Realised</div><div class="v ${cls(p.realized_pnl)}">${signedUsd(p.realized_pnl)}</div></div>
+      <div><div class="k">Unrealised</div><div class="v ${cls(p.unrealized_pnl)}">${signedUsd(p.unrealized_pnl)}</div></div>
+      <div><div class="k">Fees</div><div class="v neg">-${usd(p.fees_paid)}</div></div>
+      <div><div class="k">Funding</div><div class="v ${p.funding_paid>0?"neg":"pos"}">${p.funding_paid>0?"-":"+"}${usd(Math.abs(p.funding_paid))}</div></div>
+      <div><div class="k">Slippage</div><div class="v neg">-${usd(p.slippage_cost)}</div></div>
+      <div><div class="k">Cost drag</div><div class="v neg">${
+        p.cost_drag_annual_pct == null
+          ? pct(p.cost_pct_of_capital, 2) + " so far"
+          : pct(p.cost_drag_annual_pct, 1) + "/yr"}</div></div>
+    </div>
+    <div class="body" style="padding-top:10px">
+      <svg class="chart" id="paper-chart" height="170" role="img" aria-label="Paper account equity"></svg>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>Coin</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>Notional</th><th>Unrealised</th></tr></thead>
+      <tbody>${posRows}</tbody></table></div>
+    <div class="banner warn" style="margin:14px 16px 16px">
+      Simulated money. Fills happen at the live mark plus slippage and pay real fee and
+      funding rates, but a real order can be rejected, filled worse, or move the market —
+      especially in thin coins. Treat this as the optimistic case.
+    </div>`;
+
+  try { drawSeries("paper-chart", series); } catch (e) { console.error("paper chart:", e); }
+}
 
 /* ---------- consensus ---------- */
 function renderConsensus() {

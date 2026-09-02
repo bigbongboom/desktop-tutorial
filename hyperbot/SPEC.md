@@ -246,6 +246,30 @@ Two artefacts are surfaced rather than hidden:
 The consensus refreshes on `discovery.research_refresh_minutes` (default 20) so the panel
 does not silently age while the page looks live.
 
+## 8e. Forward paper testing (`hyperbot/paper/`)
+
+`paper.enabled` gives the engine a simulated account instead of an on-chain one. It fills at
+the live mark plus slippage, charges the base taker fee, accrues funding from the venue's
+published rates, marks to market each cycle and models liquidation. State persists, so a
+test runs for days across restarts.
+
+Distinct from `dry_run`: dry-run computes orders and sends nothing; paper additionally keeps
+an account, so a run yields a P&L rather than a list of orders whose outcome you must
+imagine. Both are on in `config.1k.yaml`, and the three live-trading locks stay closed.
+
+Measured costs at $1,000: opening the initial book cost 0.12% of capital in fees and
+slippage; funding on these markets runs ~+11% annualised and the cohort is 95% long, so the
+copier pays it.
+
+## 8f. Copyability (`research/copyability.py`)
+
+Discovery ranks on the equity curve, which counts unrealised gains. Copying needs a
+different test, and the gap is large: the account with the largest realised P&L in a live
+run ($2.98M) had made it across six closing orders. `assess()` gates on repeated realised
+profit, a usable sample, absence of the "holds losers" pattern, a realised share of total
+profit, and whether the book clears Hyperliquid's $10 minimum at the target capital. After
+research the roster is rebuilt from this score rather than from curve shape.
+
 ## 9. Safety locks on live trading
 
 Live orders require **three independent switches**, all off by default:

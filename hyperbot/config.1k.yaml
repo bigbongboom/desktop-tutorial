@@ -1,0 +1,84 @@
+# ===========================================================================
+#  $1,000 forward test.  Run:  python run.py serve -c config.1k.yaml
+#
+#  Simulated money only. `paper.enabled` keeps a real account with real prices,
+#  real fees and real funding, so the run produces a P&L you can judge - but it
+#  never touches an exchange, and the three live-trading locks are all off.
+# ===========================================================================
+network: testnet
+dry_run: true                          # LOCK 1 of 3 - no orders leave this machine
+i_understand_live_trading_risk: false  # LOCK 2 of 3
+log_level: INFO
+log_file: hyperbot-1k.log
+db_path: hyperbot-1k.db
+
+paper:
+  enabled: true
+  starting_equity: 1000
+  taker_fee_bps: 4.5     # Hyperliquid base taker tier
+  slippage_bps: 5.0      # a copier is never first to the price
+  charge_funding: true   # measured at ~+11%/yr on these markets, and we are long
+
+discovery:
+  # Scale-appropriate leaders. A $9M whale moves markets a $1k account cannot
+  # follow; a $50k trader's fills are far more reproducible.
+  min_account_value: 10000
+  max_account_value: 5000000
+  min_all_time_pnl: 5000
+  min_volume: 250000
+  deep_scan_limit: 300
+  rising_scan_share: 0.55   # weighted toward climbers, which is the point here
+  concurrency: 8
+
+  min_days_active: 21
+  max_drawdown: 0.35
+  min_consistency: 0.45
+  min_r_squared: 0.30
+  max_concentration: 0.70
+  max_turnover: 400
+
+  # The climber band, lowered for a small copier.
+  rising_min_equity: 5000
+  rising_max_equity: 1000000
+  rising_max_drawdown: 0.25
+  rising_min_consistency: 0.50
+  rising_min_r_squared: 0.40
+  rising_min_pace_ratio: 0.25
+  rising_min_days_active: 21
+
+  refresh_minutes: 360
+  research_refresh_minutes: 20
+
+copy:
+  enabled: true
+  roster: blend
+  max_leaders: 4          # fewer leaders: $1,000 spread thin becomes noise
+  rising_slots: 2
+  allocation: score
+  exposure_multiplier: 0.25   # a quarter of their position weight
+  deadband_pct: 0.04      # wider than default: $1k cannot afford churn
+  min_order_usd: 12       # above Hyperliquid's $10 floor
+  reconcile_seconds: 60
+  fill_trigger: true
+  close_orphans: true
+
+risk:
+  # At $1,000 these are the numbers that decide whether the test survives.
+  max_gross_exposure: 2.0     # 2x = $2,000 notional on $1,000
+  max_position_pct: 0.40
+  max_leverage: 5.0           # see the README on why this is not higher
+  max_concurrent_positions: 5
+  daily_loss_limit: 0.08
+  max_drawdown_limit: 0.20
+  min_account_value: 100
+  slippage_bps: 30
+  coin_allowlist: []
+  coin_denylist: []
+  flatten_on_kill: false
+  use_isolated_margin: false
+
+notify:
+  console: true
+  min_severity: INFO
+  cooldown_seconds: 60
+  daily_summary_hour_utc: 0

@@ -9,6 +9,7 @@ from ..api.info import InfoClient
 from ..log import get_logger
 from ..util import safe_div
 from .candles import EntryContext, build_context, parse_candles
+from .copyability import CopyAssessment, assess
 from .consensus import (
     FLOW_WINDOWS_HOURS,
     MIN_ACCOUNTS_FOR_FLOW,
@@ -50,6 +51,9 @@ class TraderDossier:
     backtests: list[BacktestResult] = field(default_factory=list)
     interval: str = "1h"
     notes: list[str] = field(default_factory=list)
+    # Current book, as fractions of THEIR equity - what a copier would mirror.
+    positions_snapshot: list[dict[str, Any]] = field(default_factory=list)
+    copyability: CopyAssessment | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Flat JSON for the dashboard."""
@@ -136,6 +140,20 @@ class TraderDossier:
                 }
                 for b in self.backtests
             ],
+            "positions_snapshot": self.positions_snapshot,
+            "copyability": (
+                {
+                    "score": self.copyability.score,
+                    "verdict": self.copyability.verdict,
+                    "reasons": self.copyability.reasons,
+                    "strengths": self.copyability.strengths,
+                    "expressible": self.copyability.expressible,
+                    "smallest_order_usd": self.copyability.smallest_order_usd,
+                    "positions": self.copyability.positions,
+                }
+                if self.copyability
+                else None
+            ),
             "recent_exits": [
                 {
                     "coin": e.coin, "side": "long" if e.is_long else "short",
@@ -148,8 +166,18 @@ class TraderDossier:
 
 
 class Analyst:
-    def __init__(self, info: InfoClient):
+    def __init__(
+        self,
+        info: InfoClient,
+        *,
+        capital: float = 1000.0,
+        exposure_multiplier: float = 0.25,
+    ):
         self.info = info
+        # Copyability is judged for a specific account size: what a $1,000
+        # copier can express is not what a $1M copier can.
+        self.capital = capital
+        self.exposure_multiplier = exposure_multiplier
 
     async def study(self, address: str, *, with_candles: bool = True) -> TraderDossier:
         dossier = TraderDossier(address=address)
@@ -164,6 +192,21 @@ class Analyst:
         dossier.profile = profile
         dossier.name = build_name(profile)
         dossier.description = build_description(profile)
+
+        if state and state.account_value > 0:
+            dossier.positions_snapshot = [
+                {
+                    "coin": coin,
+                    "side": "LONG" if position.is_long else "SHORT",
+                    "fraction": position.signed_notional / state.account_value,
+                    "notional": position.signed_notional,
+                    "leverage": position.leverage,
+                    "unrealized": position.unrealized_pnl,
+                }
+                for coin, position in sorted(
+                    state.positions.items(), key=lambda kv: -kv[1].position_value
+                )
+            ]
 
         if history.total_fills >= 2000:
             dossier.notes.append(
@@ -186,6 +229,12 @@ class Analyst:
         else:
             dossier.fingerprint = fingerprint([])
             dossier.archetype = classify(dossier.fingerprint, profile.median_hold_hours)
+
+        dossier.copyability = assess(
+            dossier.as_dict(),
+            capital=self.capital,
+            exposure_multiplier=self.exposure_multiplier,
+        )
         return dossier
 
     async def _add_strategy(self, dossier: TraderDossier) -> None:
